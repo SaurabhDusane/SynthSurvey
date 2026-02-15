@@ -1,0 +1,63 @@
+"""Configuration and environment variables for SynthSurvey."""
+
+from pathlib import Path
+
+from pydantic_settings import BaseSettings
+from pydantic import Field
+from typing import Optional
+
+_PROJECT_DIR = Path(__file__).parent
+_ENV_FILE = _PROJECT_DIR / ".env"
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    # LLM API Keys
+    openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    anthropic_api_key: Optional[str] = Field(default=None, alias="ANTHROPIC_API_KEY")
+    gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
+    groq_api_key: Optional[str] = Field(default=None, alias="GROQ_API_KEY")
+    mistral_api_key: Optional[str] = Field(default=None, alias="MISTRAL_API_KEY")
+    cohere_api_key: Optional[str] = Field(default=None, alias="COHERE_API_KEY")
+
+    # Default LLM provider
+    llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
+
+    # Model names
+    openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
+    anthropic_model: str = Field(
+        default="claude-3-5-sonnet-20241022", alias="ANTHROPIC_MODEL"
+    )
+    gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
+    groq_model: str = Field(default="llama-3.1-70b-versatile", alias="GROQ_MODEL")
+    mistral_model: str = Field(default="mistral-large-latest", alias="MISTRAL_MODEL")
+    cohere_model: str = Field(default="command-r-plus", alias="COHERE_MODEL")
+
+    # Rate limiting
+    api_call_delay: float = Field(default=0.5, alias="API_CALL_DELAY")
+
+    # Google Sheets (optional)
+    google_sheets_credentials_file: Optional[str] = Field(
+        default=None, alias="GOOGLE_SHEETS_CREDENTIALS_FILE"
+    )
+
+    # Generation defaults
+    default_response_count: int = 50
+    max_response_count: int = 500
+    max_retries: int = 2
+    batch_persona_size: int = 5
+
+    # Default university
+    default_university: str = "Arizona State University"
+
+    model_config = {
+        "env_file": str(_ENV_FILE),
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
+
+
+def get_settings() -> Settings:
+    """Get application settings singleton."""
+    return Settings()

@@ -1,0 +1,30 @@
+You are generating a fictional but realistic survey respondent persona.
+
+Context: This persona will be filling out a survey titled "{form_title}" about "{form_description}".
+
+Constraints from user: {user_constraints}
+
+Previously generated persona summaries (you MUST avoid duplicating these — generate someone distinctly different):
+{previous_personas}
+
+Generate a unique persona as a JSON object with EXACTLY these fields:
+- "name": A realistic fictional full name
+- "age": An integer age (typically 18-35 for students)
+- "gender": Gender identity (vary across responses)
+- "major": Major or field of study
+- "year": One of "Freshman", "Sophomore", "Junior", "Senior", "Grad Student"
+- "university": University name (default: "{default_university}")
+- "interests": A JSON array of 2-4 interests
+- "personality_traits": A JSON array of 2-4 personality traits (e.g., "introverted", "detail-oriented", "apathetic", "enthusiastic")
+- "engagement_level": Exactly one of "low", "medium", or "high" — this determines how seriously they take surveys
+- "attitude_toward_topic": A single sentence summarizing their stance on the survey's subject
+- "background_context": 1-2 sentences of backstory that informs their perspective
+
+CRITICAL RULES:
+1. Every persona MUST be unique — different name, different combination of attributes.
+2. Vary demographics realistically: mix genders, ages, majors, years, personality types.
+3. Vary engagement levels: roughly 20% low, 50% medium, 30% high.
+4. Make the persona feel like a real person, not a stereotype.
+5. The attitude and background should be relevant to the survey topic.
+
+Respond ONLY with valid JSON. No markdown, no explanation, no code fences.

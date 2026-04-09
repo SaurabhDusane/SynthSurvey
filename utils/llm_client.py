@@ -3,7 +3,6 @@
 import json
 import logging
 import time
-import traceback
 from typing import Any, Optional
 
 from config import Settings
@@ -56,7 +55,7 @@ def classify_error(exc: Exception, provider: str, model: str) -> dict:
             ),
             "retryable": True,
         }
-    if status == 401 or "auth" in msg.lower() or "invalid" in msg.lower() and "key" in msg.lower():
+    if status == 401 or "auth" in msg.lower() or ("invalid" in msg.lower() and "key" in msg.lower()):
         return {
             "error_type": "Authentication Error",
             "message": msg,
@@ -131,6 +130,7 @@ class LLMClient:
         self.settings = settings
         self.provider = settings.llm_provider.lower()
         self._client = None
+        self._gemini_model = None  # cached Gemini model object
         # Keep legacy attrs for backward compat
         self._openai_client = None
         self._anthropic_client = None
@@ -266,15 +266,21 @@ class LLMClient:
         max_tokens: int,
     ) -> str:
         """Generate using Google Gemini API."""
-        model = self._client.GenerativeModel(
-            model_name=self.settings.gemini_model,
-            system_instruction=system_prompt,
+        # Cache the model object; rebuild only if system_prompt or settings change
+        cache_key = (self.settings.gemini_model, system_prompt)
+        if self._gemini_model is None or getattr(self, "_gemini_cache_key", None) != cache_key:
+            self._gemini_model = self._client.GenerativeModel(
+                model_name=self.settings.gemini_model,
+                system_instruction=system_prompt,
+            )
+            self._gemini_cache_key = cache_key
+        response = self._gemini_model.generate_content(
+            user_prompt,
             generation_config=self._client.types.GenerationConfig(
                 temperature=temperature,
                 max_output_tokens=max_tokens,
             ),
         )
-        response = model.generate_content(user_prompt)
         return response.text
 
     def _generate_groq(
@@ -362,6 +368,38 @@ class LLMClient:
             cleaned = cleaned[:-3]
         cleaned = cleaned.strip()
         return json.loads(cleaned)
+
+    def test_connection(self) -> dict:
+        """Send a minimal request to verify the API key and model work.
+
+        Returns:
+            dict with keys: success, message, provider, model
+        """
+        meta = _PROVIDER_META.get(self.provider, {})
+        model = getattr(self.settings, meta.get("model_attr", ""), "unknown")
+        try:
+            result = self.generate(
+                system_prompt="You are a helpful assistant.",
+                user_prompt="Respond with exactly: OK",
+                temperature=0.0,
+                max_tokens=10,
+            )
+            return {
+                "success": True,
+                "message": f"Connected successfully. Response: {result.strip()[:50]}",
+                "provider": self.provider,
+                "model": model,
+            }
+        except Exception as exc:
+            diag = classify_error(exc, self.provider, model)
+            return {
+                "success": False,
+                "message": diag["message"][:200],
+                "error_type": diag["error_type"],
+                "suggestion": diag["suggestion"],
+                "provider": self.provider,
+                "model": model,
+            }
 
     def estimate_cost(
         self, num_responses: int, num_questions: int

@@ -74,10 +74,12 @@ class PersonaGenerator:
 
         for attempt in range(self.settings.max_retries + 1):
             try:
+                # Persona generation benefits from slightly higher temperature for diversity
+                persona_temp = min(getattr(self.settings, 'temperature', 0.9) + 0.1, 1.5)
                 data = self.llm.generate_json(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
-                    temperature=1.0,  # Higher temperature for diversity
+                    temperature=persona_temp,
                 )
 
                 # Handle case where LLM wraps in a key

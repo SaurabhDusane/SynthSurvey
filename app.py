@@ -485,6 +485,7 @@ def init_session_state():
         "api_call_delay": 0.5,
         "max_retries": 2,
         "generation_report": [],
+        "stop_generation": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -619,6 +620,25 @@ with st.sidebar:
     )
     st.session_state.max_retries = max_retries
 
+    # Test Connection button
+    if st.button("Test Connection", use_container_width=True, key="sidebar_test_conn"):
+        if not check_api_key():
+            st.error("Enter an API key first.")
+        else:
+            with st.spinner("Testing..."):
+                try:
+                    _settings = get_llm_settings()
+                    _llm = LLMClient(_settings)
+                    result = _llm.test_connection()
+                    if result["success"]:
+                        st.success(f"Connected to {result['provider']} ({result['model']})")
+                    else:
+                        st.error(f"{result.get('error_type', 'Error')}: {result['message'][:120]}")
+                        if result.get("suggestion"):
+                            st.info(result["suggestion"])
+                except Exception as ex:
+                    st.error(f"Connection failed: {ex}")
+
     st.markdown("""
     <div class="disclaimer-v2" style="margin-top:1.2rem;">
         <strong>Disclaimer</strong><br>
@@ -666,6 +686,7 @@ def get_llm_settings() -> Settings:
         model_state = f"{prov}_model"
         if st.session_state.get(model_state):
             setattr(settings, settings_model_attr, st.session_state[model_state])
+    settings.temperature = st.session_state.temperature
     settings.api_call_delay = st.session_state.api_call_delay
     settings.max_retries = st.session_state.max_retries
     return settings
@@ -898,7 +919,7 @@ def _render_footer():
     st.markdown("""
     <div class="app-footer">
         <div class="footer-links">
-            <a href="https://github.com" target="_blank">GitHub</a>
+            <a href="https://github.com/SaurabhDusane/SynthSurvey" target="_blank">GitHub</a>
             <a href="#">Documentation</a>
             <a href="#">Report a Bug</a>
             <a href="#">Privacy Policy</a>
@@ -1099,6 +1120,13 @@ def render_generation_page():
     with sc[2]: time_m = st.empty()
     with sc[3]: rate_m = st.empty()
 
+    # Stop button (uses st.empty so it disappears after generation)
+    stop_col, _ = st.columns([1, 3])
+    with stop_col:
+        stop_holder = st.empty()
+        if stop_holder.button("Stop Generation", type="secondary", use_container_width=True, key="stop_gen_btn"):
+            st.session_state.stop_generation = True
+
     st.divider()
 
     pc1, pc2 = st.columns(2, gap="large")
@@ -1114,8 +1142,14 @@ def render_generation_page():
     failed = 0
     consecutive_failures = 0
     _MAX_CONSECUTIVE_FAIL = 10  # stop early if all failing
+    st.session_state.stop_generation = False  # reset flag
 
     for i in range(num_responses):
+        # Check for user-requested stop
+        if st.session_state.stop_generation:
+            st.warning(f"Generation stopped by user after {i} attempts.")
+            break
+
         elapsed = time.time() - start_time
         rate = generated / elapsed if elapsed > 0 else 0
         remaining = (num_responses - i) / rate if rate > 0 else 0
@@ -1207,6 +1241,9 @@ def render_generation_page():
                 f"Check the Generation Report below for details."
             )
             break
+
+    # Clean up stop button
+    stop_holder.empty()
 
     dataset.generation_completed = datetime.now(timezone.utc).isoformat()
     dataset.total_failed = failed
@@ -1321,7 +1358,7 @@ def _render_generation_report(
 
         display_cols = ["response_num", "status", "persona_name", "error_type"]
         available_cols = [c for c in display_cols if c in log_df.columns]
-        styled = log_df[available_cols].style.applymap(_style_status, subset=["status"])
+        styled = log_df[available_cols].style.map(_style_status, subset=["status"])
         st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # Downloadable report
@@ -1390,7 +1427,7 @@ def render_results_page():
 
     st.divider()
 
-    tab_data, tab_charts, tab_personas, tab_export = st.tabs(["Data Table", "Charts", "Personas", "Export"])
+    tab_data, tab_charts, tab_diversity, tab_personas, tab_export = st.tabs(["Data Table", "Charts", "Diversity", "Personas", "Export"])
 
     with tab_data:
         # Quality score
@@ -1416,6 +1453,9 @@ def render_results_page():
     with tab_charts:
         render_charts(schema, df)
 
+    with tab_diversity:
+        render_diversity_metrics(schema, df, dataset)
+
     with tab_personas:
         render_persona_gallery(dataset)
 
@@ -1425,45 +1465,213 @@ def render_results_page():
     _render_footer()
 
 
+def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: SurveyDataset):
+    """Render response diversity analysis."""
+    st.markdown("##### Response Diversity Analysis")
+    st.markdown(
+        '<div style="font-size:.85rem;color:var(--text2);margin-bottom:1rem;">'
+        'How varied and realistic are the generated responses?</div>',
+        unsafe_allow_html=True,
+    )
+
+    colors = ["#F59E0B", "#FB923C", "#14B8A6", "#F472B6", "#FBBF24",
+              "#34D399", "#60A5FA", "#A78BFA", "#EF4444", "#C084FC"]
+    layout_common = dict(
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter", color="#E8E6F0"),
+        title_font=dict(size=14, color="#E8E6F0"),
+    )
+
+    # --- Uniqueness score ---
+    question_cols = [q.question_text for q in schema.questions if q.question_text in df.columns]
+    if question_cols:
+        unique_ratios = []
+        for col in question_cols:
+            series = df[col].dropna()
+            if len(series) > 0:
+                unique_ratios.append(series.nunique() / len(series))
+        avg_uniqueness = (sum(unique_ratios) / len(unique_ratios) * 100) if unique_ratios else 0
+
+        mc1, mc2, mc3 = st.columns(3)
+        with mc1:
+            st.markdown(
+                f'<div class="stat-glow"><div class="sn">{avg_uniqueness:.0f}%</div>'
+                f'<div class="sl">Avg Uniqueness</div></div>',
+                unsafe_allow_html=True,
+            )
+        with mc2:
+            total_unique = sum(df[col].nunique() for col in question_cols)
+            st.markdown(
+                f'<div class="stat-glow"><div class="sn">{total_unique}</div>'
+                f'<div class="sl">Unique Values</div></div>',
+                unsafe_allow_html=True,
+            )
+        with mc3:
+            # Duplicate rows check (answer columns only)
+            dup_count = df[question_cols].duplicated().sum()
+            st.markdown(
+                f'<div class="stat-glow"><div class="sn">{dup_count}</div>'
+                f'<div class="sl">Duplicate Rows</div></div>',
+                unsafe_allow_html=True,
+            )
+
+        st.divider()
+
+    # --- Per-question diversity breakdown ---
+    st.markdown("###### Per-Question Diversity")
+    diversity_data = []
+    for q in schema.questions:
+        if q.question_text not in df.columns:
+            continue
+        series = df[q.question_text].dropna()
+        if len(series) == 0:
+            continue
+        n_unique = series.nunique()
+        ratio = n_unique / len(series) * 100 if len(series) > 0 else 0
+        diversity_data.append({
+            "Question": q.question_text[:50] + ("..." if len(q.question_text) > 50 else ""),
+            "Type": q.question_type.value.replace("_", " ").title(),
+            "Unique Values": n_unique,
+            "Total": len(series),
+            "Diversity %": round(ratio, 1),
+        })
+
+    if diversity_data:
+        div_df = pd.DataFrame(diversity_data)
+        # Bar chart of diversity per question
+        fig = px.bar(
+            div_df, x="Diversity %", y="Question", orientation="h",
+            title="Response Diversity by Question",
+            color="Diversity %",
+            color_continuous_scale=["#EF4444", "#F59E0B", "#14B8A6"],
+            template="plotly_dark",
+        )
+        fig.update_layout(**layout_common, height=max(300, len(diversity_data) * 35))
+        fig.update_traces(marker_cornerradius=6)
+        st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("Detailed Diversity Table"):
+            st.dataframe(div_df, use_container_width=True, hide_index=True)
+
+    # --- Persona trait distributions ---
+    if dataset.responses:
+        st.divider()
+        st.markdown("###### Persona Distributions")
+
+        # Extract persona data from summaries
+        engagements = []
+        for resp in dataset.responses:
+            s = resp.persona_summary.lower()
+            if "high" in s:
+                engagements.append("High")
+            elif "low" in s:
+                engagements.append("Low")
+            else:
+                engagements.append("Medium")
+
+        if engagements:
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                eng_counts = pd.Series(engagements).value_counts().reset_index()
+                eng_counts.columns = ["Engagement", "Count"]
+                fig = px.pie(eng_counts, values="Count", names="Engagement",
+                             title="Engagement Level Distribution",
+                             color_discrete_sequence=colors, template="plotly_dark")
+                fig.update_layout(**layout_common)
+                fig.update_traces(textinfo="label+percent", textfont_size=12)
+                st.plotly_chart(fig, use_container_width=True)
+
+            with pc2:
+                # Response length distribution for text questions
+                text_cols = [
+                    q.question_text for q in schema.questions
+                    if q.question_type in (QuestionType.SHORT_TEXT, QuestionType.PARAGRAPH)
+                    and q.question_text in df.columns
+                ]
+                if text_cols:
+                    lengths = df[text_cols[0]].dropna().astype(str).str.len()
+                    fig = px.histogram(lengths, nbins=20,
+                                       title=f"Response Length: {text_cols[0][:30]}...",
+                                       labels={"value": "Characters", "count": "Frequency"},
+                                       template="plotly_dark",
+                                       color_discrete_sequence=[colors[2]])
+                    fig.update_layout(**layout_common)
+                    fig.update_traces(marker_cornerradius=6)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No text questions to analyze response length.")
+
+
 def render_persona_gallery(dataset: SurveyDataset):
     """Render a gallery of generated personas from the dataset."""
     if not dataset.responses:
         st.info("No personas to display.")
         return
 
+    total = len(dataset.responses)
+    success_count = sum(1 for r in dataset.responses if r.generation_success)
+
     st.markdown("##### Generated Personas")
+
+    # Pagination
+    per_page = 12
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page_key = "persona_gallery_page"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+
     st.markdown(
-        f'<div style="font-size:.85rem;color:var(--text2);margin-bottom:1rem;">'
-        f'Showing {min(len(dataset.responses), 20)} of {len(dataset.responses)} personas</div>',
+        f'<div style="font-size:.85rem;color:var(--text2);margin-bottom:.6rem;">'
+        f'{success_count} successful / {total} total &bull; '
+        f'Page {st.session_state[page_key]+1} of {total_pages}</div>',
         unsafe_allow_html=True,
     )
 
-    # Show up to 20 personas in a 2-column grid
-    responses = dataset.responses[:20]
-    for i in range(0, len(responses), 2):
-        cols = st.columns(2, gap="medium")
+    # Page controls
+    if total_pages > 1:
+        pg_cols = st.columns([1, 1, 4])
+        with pg_cols[0]:
+            if st.button("Previous", disabled=st.session_state[page_key] <= 0, key="pg_prev", use_container_width=True):
+                st.session_state[page_key] -= 1
+                st.rerun()
+        with pg_cols[1]:
+            if st.button("Next", disabled=st.session_state[page_key] >= total_pages - 1, key="pg_next", use_container_width=True):
+                st.session_state[page_key] += 1
+                st.rerun()
+
+    start = st.session_state[page_key] * per_page
+    page_responses = dataset.responses[start:start + per_page]
+
+    # 3-column grid for richer cards
+    for i in range(0, len(page_responses), 3):
+        cols = st.columns(3, gap="medium")
         for j, col in enumerate(cols):
             idx = i + j
-            if idx >= len(responses):
+            if idx >= len(page_responses):
                 break
-            resp = responses[idx]
+            resp = page_responses[idx]
+            global_idx = start + idx + 1
             with col:
-                summary = resp.persona_summary or f"Persona {resp.persona_id[:8]}"
                 success_icon = "&#9679;" if resp.generation_success else "&#9675;"
                 success_color = "#14B8A6" if resp.generation_success else "#EF4444"
+                # Parse key details from summary
+                parts = resp.persona_summary.split(", ") if resp.persona_summary else []
+                name = parts[0] if parts else f"Persona #{global_idx}"
+                detail_line = ", ".join(parts[1:4]) if len(parts) > 1 else ""
+                rest = ". ".join(resp.persona_summary.split(". ")[1:]) if ". " in resp.persona_summary else ""
+
                 st.markdown(
                     f'<div class="persona-card-v2" style="margin-bottom:.6rem;">'
                     f'<div class="persona-name">'
-                    f'<span style="color:{success_color};font-size:.7rem;margin-right:6px;">{success_icon}</span>'
-                    f'{summary}</div>'
+                    f'<span style="color:{success_color};font-size:.6rem;margin-right:6px;">{success_icon}</span>'
+                    f'#{global_idx} &mdash; {name}</div>'
                     f'<div class="persona-detail">'
-                    f'<span style="font-size:.75rem;color:var(--text3);">ID: {resp.persona_id[:12]}...</span>'
+                    f'{detail_line}<br>'
+                    f'<span style="font-size:.78rem;color:var(--text3);line-height:1.5;">{rest[:150]}{"..." if len(rest)>150 else ""}</span><br>'
+                    f'<span style="font-size:.7rem;color:var(--text3);opacity:.6;">Retries: {resp.retry_count}</span>'
                     f'</div></div>',
                     unsafe_allow_html=True,
                 )
-
-    if len(dataset.responses) > 20:
-        st.caption(f"Showing first 20 of {len(dataset.responses)} personas. Download the full dataset for all.")
 
 
 def render_charts(schema: FormSchema, df: pd.DataFrame):
@@ -1557,44 +1765,79 @@ def render_export(schema: FormSchema, dataset: SurveyDataset, df: pd.DataFrame):
     st.markdown("##### Download Your Data")
     st.markdown("")
 
-    c1, c2, c3 = st.columns(3)
+    safe_title = schema.form_title[:30].replace(' ', '_').replace('/', '_')
+    csv_bytes = CSVExporter.to_csv_bytes(df)
+    json_bytes = JSONExporter.to_json_bytes(dataset, schema)
+
+    # Excel bytes
+    import io as _io
+    xlsx_buf = _io.BytesIO()
+    df.to_excel(xlsx_buf, index=False, engine="openpyxl")
+    xlsx_bytes = xlsx_buf.getvalue()
+
+    # File size display
+    def _fmt_size(b: int) -> str:
+        if b < 1024:
+            return f"{b} B"
+        if b < 1024 * 1024:
+            return f"{b/1024:.1f} KB"
+        return f"{b/(1024*1024):.1f} MB"
+
+    c1, c2, c3, c4 = st.columns(4)
 
     with c1:
-        st.markdown("""
+        st.markdown(f"""
         <div class="glass-card" style="text-align:center;padding:1.5rem;">
             <div style="font-size:2rem;margin-bottom:.5rem;">&#128196;</div>
             <div style="font-weight:700;color:var(--text1);margin-bottom:.2rem;">CSV</div>
-            <div style="font-size:.8rem;color:var(--text3);margin-bottom:1rem;">Spreadsheet-ready format</div>
+            <div style="font-size:.75rem;color:var(--text3);margin-bottom:1rem;">
+                Spreadsheet-ready &bull; {_fmt_size(len(csv_bytes))}</div>
         </div>
         """, unsafe_allow_html=True)
-        csv_bytes = CSVExporter.to_csv_bytes(df)
         st.download_button(
             label="Download CSV", data=csv_bytes,
-            file_name=f"synthsurvey_{schema.form_title[:30].replace(' ','_')}.csv",
+            file_name=f"synthsurvey_{safe_title}.csv",
             mime="text/csv", use_container_width=True,
         )
 
     with c2:
-        st.markdown("""
+        st.markdown(f"""
         <div class="glass-card" style="text-align:center;padding:1.5rem;">
             <div style="font-size:2rem;margin-bottom:.5rem;">&#128218;</div>
             <div style="font-weight:700;color:var(--text1);margin-bottom:.2rem;">JSON</div>
-            <div style="font-size:.8rem;color:var(--text3);margin-bottom:1rem;">Structured with metadata</div>
+            <div style="font-size:.75rem;color:var(--text3);margin-bottom:1rem;">
+                Structured with metadata &bull; {_fmt_size(len(json_bytes))}</div>
         </div>
         """, unsafe_allow_html=True)
-        json_bytes = JSONExporter.to_json_bytes(dataset, schema)
         st.download_button(
             label="Download JSON", data=json_bytes,
-            file_name=f"synthsurvey_{schema.form_title[:30].replace(' ','_')}.json",
+            file_name=f"synthsurvey_{safe_title}.json",
             mime="application/json", use_container_width=True,
         )
 
     with c3:
+        st.markdown(f"""
+        <div class="glass-card" style="text-align:center;padding:1.5rem;">
+            <div style="font-size:2rem;margin-bottom:.5rem;">&#128202;</div>
+            <div style="font-weight:700;color:var(--text1);margin-bottom:.2rem;">Excel</div>
+            <div style="font-size:.75rem;color:var(--text3);margin-bottom:1rem;">
+                .xlsx workbook &bull; {_fmt_size(len(xlsx_bytes))}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.download_button(
+            label="Download Excel", data=xlsx_bytes,
+            file_name=f"synthsurvey_{safe_title}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    with c4:
         st.markdown("""
         <div class="glass-card" style="text-align:center;padding:1.5rem;">
             <div style="font-size:2rem;margin-bottom:.5rem;">&#128200;</div>
             <div style="font-weight:700;color:var(--text1);margin-bottom:.2rem;">Google Sheets</div>
-            <div style="font-size:.8rem;color:var(--text3);margin-bottom:1rem;">Requires credentials</div>
+            <div style="font-size:.75rem;color:var(--text3);margin-bottom:1rem;">
+                Requires credentials</div>
         </div>
         """, unsafe_allow_html=True)
         st.button(
@@ -1605,7 +1848,7 @@ def render_export(schema: FormSchema, dataset: SurveyDataset, df: pd.DataFrame):
     st.divider()
 
     with st.expander("Raw JSON Preview"):
-        json_str = JSONExporter.to_json_string(dataset, schema)
+        json_str = json_bytes.decode("utf-8")
         st.code(json_str[:5000] + ("..." if len(json_str) > 5000 else ""), language="json")
 
 

@@ -125,7 +125,7 @@ class ResponseGenerator:
                 answers = self.llm.generate_json(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
-                    temperature=0.8,
+                    temperature=getattr(self.settings, 'temperature', 0.8),
                 )
 
                 # Handle case where LLM wraps answers in a key

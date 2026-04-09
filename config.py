@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     mistral_model: str = Field(default="mistral-large-latest", alias="MISTRAL_MODEL")
     cohere_model: str = Field(default="command-r-plus", alias="COHERE_MODEL")
 
+    # Generation settings
+    temperature: float = Field(default=0.7, alias="TEMPERATURE")
+
     # Rate limiting
     api_call_delay: float = Field(default=0.5, alias="API_CALL_DELAY")
 

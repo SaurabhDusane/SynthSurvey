@@ -1,7 +1,7 @@
 """Unique persona card generation using LLM."""
 
 import json
-import os
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +19,7 @@ class PersonaGenerator:
         self.settings = settings
         self.generated_personas: list[Persona] = []
         self._seen_attribute_tuples: set[tuple] = set()
+        self._lock = threading.Lock()
         self._prompt_template = self._load_prompt_template()
 
     def _load_prompt_template(self) -> str:
@@ -66,7 +67,8 @@ class PersonaGenerator:
         Raises:
             ValueError: If unable to generate a unique persona after retries.
         """
-        system_prompt = self._build_prompt(form_schema, user_constraints)
+        with self._lock:
+            system_prompt = self._build_prompt(form_schema, user_constraints)
         user_prompt = (
             "Generate one unique persona as a JSON object. "
             "Remember: it must be different from all previously generated personas."
@@ -88,17 +90,20 @@ class PersonaGenerator:
 
                 persona = Persona(**data)
 
-                # Check uniqueness
+                # Check uniqueness (guarded — this generator may be shared
+                # across concurrent workers).
                 attr_tuple = persona.attribute_tuple()
-                if attr_tuple in self._seen_attribute_tuples:
-                    if attempt < self.settings.max_retries:
-                        continue
-                    # On last attempt, modify slightly to force uniqueness
-                    persona.persona_id = persona.persona_id + "_r"
-
-                self._seen_attribute_tuples.add(attr_tuple)
-                self.generated_personas.append(persona)
-                return persona
+                with self._lock:
+                    is_dup = attr_tuple in self._seen_attribute_tuples
+                    if not (is_dup and attempt < self.settings.max_retries):
+                        if is_dup:
+                            # On the last attempt, nudge the id to stay unique.
+                            persona.persona_id = persona.persona_id + "_r"
+                        self._seen_attribute_tuples.add(attr_tuple)
+                        self.generated_personas.append(persona)
+                        return persona
+                # Duplicate on a non-final attempt — regenerate.
+                continue
 
             except (json.JSONDecodeError, TypeError, KeyError) as e:
                 if attempt >= self.settings.max_retries:

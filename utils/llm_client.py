@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 import time
 from typing import Any, Optional
 
@@ -11,6 +12,31 @@ log = logging.getLogger(__name__)
 
 # HTTP status codes that are retryable
 _RETRYABLE_STATUS = {429, 500, 502, 503, 529}
+
+
+class RateLimiter:
+    """Thread-safe token-bucket-style limiter that paces the *start* of calls.
+
+    Each caller reserves the next available time slot and sleeps outside the
+    lock, so concurrent workers are globally spaced by ``min_interval`` while
+    their (slow) network calls still overlap.
+    """
+
+    def __init__(self, rate_per_sec: float):
+        self.min_interval = 1.0 / rate_per_sec if rate_per_sec and rate_per_sec > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next_time = 0.0
+
+    def acquire(self) -> None:
+        if self.min_interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            scheduled = max(now, self._next_time)
+            self._next_time = scheduled + self.min_interval
+            wait = scheduled - now
+        if wait > 0:
+            time.sleep(wait)
 
 
 def _extract_status_code(exc: Exception) -> Optional[int]:
@@ -112,6 +138,49 @@ def classify_error(exc: Exception, provider: str, model: str) -> dict:
     }
 
 
+# Approximate pricing per 1M tokens, keyed by exact model name: (input, output).
+# Falls back to _PROVIDER_PRICING when a model isn't listed here.
+_MODEL_PRICING = {
+    # OpenAI
+    "gpt-4o":                       (2.50, 10.00),
+    "gpt-4o-mini":                  (0.15, 0.60),
+    "gpt-4-turbo":                  (10.00, 30.00),
+    "gpt-3.5-turbo":                (0.50, 1.50),
+    # Anthropic
+    "claude-3-5-sonnet-20241022":   (3.00, 15.00),
+    "claude-3-opus-20240229":       (15.00, 75.00),
+    "claude-3-haiku-20240307":      (0.25, 1.25),
+    # Google Gemini
+    "gemini-2.0-flash":             (0.10, 0.40),
+    "gemini-2.0-flash-lite":        (0.075, 0.30),
+    "gemini-1.5-pro-latest":        (1.25, 5.00),
+    "gemini-1.5-flash-latest":      (0.075, 0.30),
+    # Groq
+    "llama-3.3-70b-versatile":      (0.59, 0.79),
+    "llama-3.1-8b-instant":         (0.05, 0.08),
+    "gemma2-9b-it":                 (0.20, 0.20),
+    # Mistral
+    "mistral-large-latest":         (2.00, 6.00),
+    "mistral-medium-latest":        (2.75, 8.10),
+    "mistral-small-latest":         (0.20, 0.60),
+    "open-mixtral-8x22b":           (2.00, 6.00),
+    # Cohere
+    "command-r-plus":               (2.50, 10.00),
+    "command-r":                    (0.15, 0.60),
+    "command-light":                (0.30, 0.60),
+}
+
+# Per-provider fallback pricing when the exact model isn't in _MODEL_PRICING.
+_PROVIDER_PRICING = {
+    "openai":    (2.50, 10.00),
+    "anthropic": (3.00, 15.00),
+    "gemini":    (1.25, 5.00),
+    "groq":      (0.59, 0.79),
+    "mistral":   (2.00, 6.00),
+    "cohere":    (2.50, 10.00),
+}
+
+
 # Provider-to-key/model mapping
 _PROVIDER_META = {
     "openai":    {"key_attr": "openai_api_key",    "model_attr": "openai_model"},
@@ -126,11 +195,11 @@ _PROVIDER_META = {
 class LLMClient:
     """Unified LLM client supporting OpenAI, Anthropic, Gemini, Groq, Mistral, and Cohere."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, rate_limiter: Optional[RateLimiter] = None):
         self.settings = settings
         self.provider = settings.llm_provider.lower()
+        self._rate_limiter = rate_limiter
         self._client = None
-        self._gemini_model = None  # cached Gemini model object
         # Keep legacy attrs for backward compat
         self._openai_client = None
         self._anthropic_client = None
@@ -157,9 +226,8 @@ class LLMClient:
             self._anthropic_client = anthropic.Anthropic(api_key=api_key)
             self._client = self._anthropic_client
         elif self.provider == "gemini":
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            self._client = genai
+            from google import genai
+            self._client = genai.Client(api_key=api_key)
         elif self.provider == "groq":
             from groq import Groq
             self._client = Groq(api_key=api_key)
@@ -203,8 +271,12 @@ class LLMClient:
         max_retries = getattr(self.settings, "max_retries", 2)
         last_exc = None
         for attempt in range(max_retries + 1):
-            # Rate limiting
-            time.sleep(self.settings.api_call_delay)
+            # Rate limiting: a shared limiter paces concurrent workers; without
+            # one, fall back to a simple per-call delay.
+            if self._rate_limiter is not None:
+                self._rate_limiter.acquire()
+            elif self.settings.api_call_delay > 0:
+                time.sleep(self.settings.api_call_delay)
             try:
                 return fn(system_prompt, user_prompt, temperature, max_tokens)
             except Exception as exc:
@@ -265,20 +337,17 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
     ) -> str:
-        """Generate using Google Gemini API."""
-        # Cache the model object; rebuild only if system_prompt or settings change
-        cache_key = (self.settings.gemini_model, system_prompt)
-        if self._gemini_model is None or getattr(self, "_gemini_cache_key", None) != cache_key:
-            self._gemini_model = self._client.GenerativeModel(
-                model_name=self.settings.gemini_model,
+        """Generate using the Google Gemini API (google-genai SDK)."""
+        from google.genai import types
+
+        response = self._client.models.generate_content(
+            model=self.settings.gemini_model,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-            )
-            self._gemini_cache_key = cache_key
-        response = self._gemini_model.generate_content(
-            user_prompt,
-            generation_config=self._client.types.GenerationConfig(
                 temperature=temperature,
                 max_output_tokens=max_tokens,
+                response_mime_type="application/json",
             ),
         )
         return response.text
@@ -417,18 +486,17 @@ class LLMClient:
         total_input = num_responses * (persona_input_tokens + form_fill_input_tokens)
         total_output = num_responses * (persona_output_tokens + form_fill_output_tokens)
 
-        # Pricing (approximate, per 1M tokens)
-        pricing = {
-            "openai":    (2.50, 10.00),   # GPT-4o
-            "anthropic": (3.00, 15.00),   # Claude 3.5 Sonnet
-            "gemini":    (1.25, 5.00),    # Gemini 1.5 Pro
-            "groq":      (0.59, 0.79),    # Llama 3.1 70B
-            "mistral":   (2.00, 6.00),    # Mistral Large
-            "cohere":    (2.50, 10.00),   # Command R+
-        }
-        input_cost_per_m, output_cost_per_m = pricing.get(
-            self.provider, (2.50, 10.00)
+        # Resolve the exact selected model, then price by model (falling back
+        # to a per-provider default) so estimates track the chosen model.
+        model = getattr(
+            self.settings,
+            _PROVIDER_META.get(self.provider, {}).get("model_attr", "openai_model"),
+            "unknown",
         )
+        input_cost_per_m, output_cost_per_m = _MODEL_PRICING.get(
+            model, _PROVIDER_PRICING.get(self.provider, (2.50, 10.00))
+        )
+        priced_by_model = model in _MODEL_PRICING
 
         estimated_cost = (
             (total_input / 1_000_000) * input_cost_per_m
@@ -440,9 +508,6 @@ class LLMClient:
             "estimated_output_tokens": total_output,
             "estimated_cost_usd": round(estimated_cost, 4),
             "provider": self.provider,
-            "model": getattr(
-                self.settings,
-                _PROVIDER_META.get(self.provider, {}).get("model_attr", "openai_model"),
-                "unknown",
-            ),
+            "model": model,
+            "priced_by_model": priced_by_model,
         }

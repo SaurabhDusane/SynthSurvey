@@ -30,7 +30,7 @@ class Settings(BaseSettings):
         default="claude-3-5-sonnet-20241022", alias="ANTHROPIC_MODEL"
     )
     gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
-    groq_model: str = Field(default="llama-3.1-70b-versatile", alias="GROQ_MODEL")
+    groq_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_MODEL")
     mistral_model: str = Field(default="mistral-large-latest", alias="MISTRAL_MODEL")
     cohere_model: str = Field(default="command-r-plus", alias="COHERE_MODEL")
 
@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     # Rate limiting
     api_call_delay: float = Field(default=0.5, alias="API_CALL_DELAY")
+
+    # Number of responses generated in parallel (paced by api_call_delay)
+    concurrency: int = Field(default=4, alias="CONCURRENCY")
 
     # Google Sheets (optional)
     google_sheets_credentials_file: Optional[str] = Field(

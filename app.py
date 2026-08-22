@@ -4,7 +4,9 @@ import sys
 import os
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from html import escape as _esc
 from pathlib import Path
 from typing import Optional
 
@@ -25,7 +27,7 @@ from generators.persona_generator import PersonaGenerator
 from generators.response_generator import ResponseGenerator
 from exporters.csv_exporter import CSVExporter
 from exporters.json_exporter import JSONExporter
-from utils.llm_client import LLMClient, classify_error
+from utils.llm_client import LLMClient, RateLimiter, classify_error
 from utils.validators import ResponseValidator
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
@@ -478,11 +480,12 @@ def init_session_state():
         "openai_model": "gpt-4o",
         "anthropic_model": "claude-3-5-sonnet-20241022",
         "gemini_model": "gemini-2.0-flash",
-        "groq_model": "llama-3.1-70b-versatile",
+        "groq_model": "llama-3.3-70b-versatile",
         "mistral_model": "mistral-large-latest",
         "cohere_model": "command-r-plus",
         "temperature": 0.7,
         "api_call_delay": 0.5,
+        "concurrency": 4,
         "max_retries": 2,
         "generation_report": [],
         "stop_generation": False,
@@ -573,7 +576,7 @@ with st.sidebar:
         "openai":    ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
         "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"],
         "gemini":    ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro-latest", "gemini-1.5-flash-latest"],
-        "groq":      ["llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
+        "groq":      ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"],
         "mistral":   ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "open-mixtral-8x22b"],
         "cohere":    ["command-r-plus", "command-r", "command-light"],
     }
@@ -611,6 +614,14 @@ with st.sidebar:
         help="Delay between API calls to avoid rate limits.",
     )
     st.session_state.api_call_delay = api_delay
+
+    concurrency = st.slider(
+        "Parallel Requests", min_value=1, max_value=8, step=1,
+        value=st.session_state.concurrency,
+        key="sidebar_concurrency",
+        help="How many responses to generate at once. Higher = faster, but more likely to hit rate limits.",
+    )
+    st.session_state.concurrency = concurrency
 
     max_retries = st.number_input(
         "Max Retries per Response", min_value=0, max_value=5, step=1,
@@ -688,6 +699,7 @@ def get_llm_settings() -> Settings:
             setattr(settings, settings_model_attr, st.session_state[model_state])
     settings.temperature = st.session_state.temperature
     settings.api_call_delay = st.session_state.api_call_delay
+    settings.concurrency = st.session_state.concurrency
     settings.max_retries = st.session_state.max_retries
     return settings
 
@@ -945,7 +957,7 @@ def render_preview_page():
     <div style="padding:.3rem 0;">
         <div style="font-size:.72rem;color:var(--text3);text-transform:uppercase;
                     letter-spacing:.12em;font-weight:600;margin-bottom:3px;">Form Preview</div>
-        <h1 style="margin:0!important;">{schema.form_title}</h1>
+        <h1 style="margin:0!important;">{_esc(schema.form_title)}</h1>
     </div>
     """, unsafe_allow_html=True)
     if schema.form_description:
@@ -1015,7 +1027,15 @@ def render_preview_page():
             with ec1: st.metric("Input Tokens", f"{cost['estimated_input_tokens']:,}")
             with ec2: st.metric("Output Tokens", f"{cost['estimated_output_tokens']:,}")
             with ec3: st.metric("Cost", f"${cost['estimated_cost_usd']:.4f}")
-            st.caption(f"Provider: {cost['provider']} | Model: {cost['model']}")
+            _price_note = (
+                "priced for this model"
+                if cost.get("priced_by_model")
+                else "no per-model price on file — using a provider average"
+            )
+            st.caption(
+                f"Provider: {cost['provider']} | Model: {cost['model']} | "
+                f"Approximate estimate ({_price_note})."
+            )
         except Exception:
             pass
 
@@ -1095,8 +1115,11 @@ def render_generation_page():
     model_attr = f"{provider}_model"
     model_name = getattr(settings, model_attr, "unknown")
 
+    concurrency = max(1, int(getattr(settings, "concurrency", 4)))
+    _rate = (1.0 / settings.api_call_delay) if settings.api_call_delay and settings.api_call_delay > 0 else 0.0
+    rate_limiter = RateLimiter(_rate)
     try:
-        llm = LLMClient(settings)
+        llm = LLMClient(settings, rate_limiter=rate_limiter)
     except ValueError as e:
         st.error(str(e))
         st.session_state.generation_in_progress = False
@@ -1137,30 +1160,49 @@ def render_generation_page():
         st.markdown("##### Latest Response")
         response_preview = st.empty()
 
-    start_time = time.time()
-    generated = 0
-    failed = 0
-    consecutive_failures = 0
-    _MAX_CONSECUTIVE_FAIL = 10  # stop early if all failing
-    st.session_state.stop_generation = False  # reset flag
+    q_map = {q.question_id: q.question_text for q in schema.questions}
 
-    for i in range(num_responses):
-        # Check for user-requested stop
-        if st.session_state.stop_generation:
-            st.warning(f"Generation stopped by user after {i} attempts.")
-            break
+    def _persona_html(persona: Persona) -> str:
+        itags = "".join(f'<span class="persona-tag">{_esc(str(x))}</span>' for x in persona.interests)
+        ttags = "".join(f'<span class="persona-tag">{_esc(str(x))}</span>' for x in persona.personality_traits)
+        return (
+            f'<div class="persona-card-v2">'
+            f'<div class="persona-name">{_esc(persona.name)}</div>'
+            f'<div class="persona-detail">'
+            f'{_esc(str(persona.age))} &bull; {_esc(persona.gender)} &bull; {_esc(persona.year)}<br>'
+            f'{_esc(persona.major)} @ {_esc(persona.university)}<br><br>'
+            f'<strong>Interests:</strong><br>{itags}<br><br>'
+            f'<strong>Traits:</strong><br>{ttags}<br><br>'
+            f'<strong>Engagement:</strong> {_esc(persona.engagement_level)}<br>'
+            f'<strong>Attitude:</strong> {_esc(persona.attitude_toward_topic)}<br><br>'
+            f'<em style="color:var(--text3)">{_esc(persona.background_context)}</em>'
+            f'</div></div>'
+        )
 
-        elapsed = time.time() - start_time
-        rate = generated / elapsed if elapsed > 0 else 0
-        remaining = (num_responses - i) / rate if rate > 0 else 0
-        pct = (i + 1) / num_responses
+    def _response_html(response: GeneratedResponse) -> str:
+        items = list(response.answers.items())[:5]
+        html = '<div class="response-card">'
+        for qid, ans in items:
+            qt = q_map.get(qid, qid)
+            if isinstance(ans, list): ans_s = ", ".join(str(a) for a in ans)
+            elif isinstance(ans, dict): ans_s = json.dumps(ans, indent=1)
+            else: ans_s = str(ans)
+            html += (
+                f'<div style="margin-bottom:.65rem;">'
+                f'<div style="font-size:.75rem;color:var(--text3);font-weight:600;'
+                f'text-transform:uppercase;letter-spacing:.04em;">{_esc(str(qt))}</div>'
+                f'<div style="color:var(--text1);margin-top:2px;">{_esc(ans_s)}</div></div>'
+            )
+        if len(response.answers) > 5:
+            html += f'<div style="color:var(--text3);font-size:.82rem;font-style:italic;">...and {len(response.answers)-5} more</div>'
+        html += '</div>'
+        return html
 
-        progress_bar.progress(pct, text=f"Response {i+1} / {num_responses}  ({pct*100:.0f}%)")
-        gen_m.metric("Generated", generated)
-        fail_m.metric("Failed", failed)
-        time_m.metric("Elapsed", f"{elapsed:.0f}s")
-        rate_m.metric("ETA", f"{remaining:.0f}s" if rate > 0 else "...")
+    constraints = st.session_state.persona_constraints or None
 
+    def _work(i: int) -> dict:
+        """Generate one persona + response. Runs in a worker thread — no
+        Streamlit calls here, only the (thread-safe) generators."""
         entry = {
             "response_num": i + 1,
             "status": "success",
@@ -1170,80 +1212,94 @@ def render_generation_page():
             "suggestion": None,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-
         try:
-            persona = persona_gen.generate_one(schema, st.session_state.persona_constraints or None)
+            persona = persona_gen.generate_one(schema, constraints)
             entry["persona_name"] = persona.name
-
-            itags = "".join(f'<span class="persona-tag">{x}</span>' for x in persona.interests)
-            ttags = "".join(f'<span class="persona-tag">{x}</span>' for x in persona.personality_traits)
-            persona_preview.markdown(
-                f'<div class="persona-card-v2">'
-                f'<div class="persona-name">{persona.name}</div>'
-                f'<div class="persona-detail">'
-                f'{persona.age} &bull; {persona.gender} &bull; {persona.year}<br>'
-                f'{persona.major} @ {persona.university}<br><br>'
-                f'<strong>Interests:</strong><br>{itags}<br><br>'
-                f'<strong>Traits:</strong><br>{ttags}<br><br>'
-                f'<strong>Engagement:</strong> {persona.engagement_level}<br>'
-                f'<strong>Attitude:</strong> {persona.attitude_toward_topic}<br><br>'
-                f'<em style="color:var(--text3)">{persona.background_context}</em>'
-                f'</div></div>',
-                unsafe_allow_html=True,
-            )
-
             response = response_gen.generate_one(persona, schema)
-            if response.generation_success:
-                generated += 1
-                consecutive_failures = 0
-                items = list(response.answers.items())[:5]
-                q_map = {q.question_id: q.question_text for q in schema.questions}
-                html = '<div class="response-card">'
-                for qid, ans in items:
-                    qt = q_map.get(qid, qid)
-                    if isinstance(ans, list): ans_s = ", ".join(str(a) for a in ans)
-                    elif isinstance(ans, dict): ans_s = json.dumps(ans, indent=1)
-                    else: ans_s = str(ans)
-                    html += (
-                        f'<div style="margin-bottom:.65rem;">'
-                        f'<div style="font-size:.75rem;color:var(--text3);font-weight:600;'
-                        f'text-transform:uppercase;letter-spacing:.04em;">{qt}</div>'
-                        f'<div style="color:var(--text1);margin-top:2px;">{ans_s}</div></div>'
-                    )
-                if len(response.answers) > 5:
-                    html += f'<div style="color:var(--text3);font-size:.82rem;font-style:italic;">...and {len(response.answers)-5} more</div>'
-                html += '</div>'
-                response_preview.markdown(html, unsafe_allow_html=True)
-            else:
-                failed += 1
-                consecutive_failures += 1
+            if not response.generation_success:
                 entry["status"] = "failed"
                 entry["error_type"] = "Validation Failed"
                 entry["error_message"] = "Response generated but failed validation checks"
                 entry["suggestion"] = "Try lowering temperature or using a more capable model"
-            dataset.add_response(response)
+            return {"i": i, "entry": entry, "persona": persona, "response": response}
         except Exception as e:
-            failed += 1
-            consecutive_failures += 1
             diag = classify_error(e, provider, model_name)
             entry["status"] = "failed"
             entry["error_type"] = diag["error_type"]
             entry["error_message"] = diag["message"][:300]
             entry["suggestion"] = diag["suggestion"]
-            st.warning(f"Response {i+1} failed: {diag['error_type']}")
+            return {"i": i, "entry": entry, "persona": None, "response": None}
 
-        report_log.append(entry)
+    start_time = time.time()
+    generated = 0
+    failed = 0
+    completed = 0
+    consecutive_failures = 0
+    _MAX_CONSECUTIVE_FAIL = 10  # stop early if everything is failing
+    st.session_state.stop_generation = False  # reset flag
 
-        # Early stop if all recent attempts are failing with the same error
-        if consecutive_failures >= _MAX_CONSECUTIVE_FAIL:
-            st.error(
-                f"Stopped early: {_MAX_CONSECUTIVE_FAIL} consecutive failures. "
-                f"Check the Generation Report below for details."
-            )
-            break
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = {executor.submit(_work, i): i for i in range(num_responses)}
+        for future in as_completed(futures):
+            # User-requested stop (best-effort: cancels not-yet-started work).
+            if st.session_state.stop_generation:
+                for f in futures:
+                    f.cancel()
+                st.warning(f"Generation stopped by user after {completed} of {num_responses}.")
+                break
+
+            result = future.result()
+            entry = result["entry"]
+            persona = result["persona"]
+            response = result["response"]
+            completed += 1
+
+            if response is not None:
+                dataset.add_response(response)
+                if response.generation_success:
+                    generated += 1
+                    consecutive_failures = 0
+                else:
+                    failed += 1
+                    consecutive_failures += 1
+            else:
+                failed += 1
+                consecutive_failures += 1
+                if entry["error_type"]:
+                    st.warning(f"Response {entry['response_num']} failed: {entry['error_type']}")
+
+            if persona is not None:
+                persona_preview.markdown(_persona_html(persona), unsafe_allow_html=True)
+            if response is not None and response.generation_success:
+                response_preview.markdown(_response_html(response), unsafe_allow_html=True)
+
+            report_log.append(entry)
+
+            elapsed = time.time() - start_time
+            rate = completed / elapsed if elapsed > 0 else 0
+            remaining = (num_responses - completed) / rate if rate > 0 else 0
+            pct = completed / num_responses if num_responses else 1.0
+            progress_bar.progress(min(pct, 1.0), text=f"Response {completed} / {num_responses}  ({pct*100:.0f}%)")
+            gen_m.metric("Generated", generated)
+            fail_m.metric("Failed", failed)
+            time_m.metric("Elapsed", f"{elapsed:.0f}s")
+            rate_m.metric("ETA", f"{remaining:.0f}s" if rate > 0 else "...")
+
+            # Early stop if nothing is succeeding (e.g. bad key / dead model).
+            if consecutive_failures >= _MAX_CONSECUTIVE_FAIL and generated == 0:
+                for f in futures:
+                    f.cancel()
+                st.error(
+                    f"Stopped early: {_MAX_CONSECUTIVE_FAIL} consecutive failures with no success. "
+                    f"Check the Generation Report below for details."
+                )
+                break
 
     # Clean up stop button
     stop_holder.empty()
+
+    # Results arrive out of order under concurrency — restore submission order.
+    report_log.sort(key=lambda e: e["response_num"])
 
     dataset.generation_completed = datetime.now(timezone.utc).isoformat()
     dataset.total_failed = failed
@@ -1320,8 +1376,8 @@ def _render_generation_report(
             </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem .8rem;font-size:.84rem;color:var(--text2);">
-            <div><strong>Provider:</strong> {provider}</div>
-            <div><strong>Model:</strong> {model}</div>
+            <div><strong>Provider:</strong> {_esc(str(provider))}</div>
+            <div><strong>Model:</strong> {_esc(str(model))}</div>
             <div><strong>Temperature:</strong> {st.session_state.temperature}</div>
             <div><strong>API Delay:</strong> {st.session_state.api_call_delay}s</div>
         </div>
@@ -1410,7 +1466,7 @@ def render_results_page():
     <div style="padding:.3rem 0;">
         <div style="font-size:.72rem;color:var(--text3);text-transform:uppercase;
                     letter-spacing:.12em;font-weight:600;margin-bottom:3px;">Results</div>
-        <h1 style="margin:0!important;">{schema.form_title}</h1>
+        <h1 style="margin:0!important;">{_esc(schema.form_title)}</h1>
         <div style="color:var(--text2);margin-top:5px;">{len(df)} total responses</div>
     </div>
     """, unsafe_allow_html=True)
@@ -1664,10 +1720,10 @@ def render_persona_gallery(dataset: SurveyDataset):
                     f'<div class="persona-card-v2" style="margin-bottom:.6rem;">'
                     f'<div class="persona-name">'
                     f'<span style="color:{success_color};font-size:.6rem;margin-right:6px;">{success_icon}</span>'
-                    f'#{global_idx} &mdash; {name}</div>'
+                    f'#{global_idx} &mdash; {_esc(name)}</div>'
                     f'<div class="persona-detail">'
-                    f'{detail_line}<br>'
-                    f'<span style="font-size:.78rem;color:var(--text3);line-height:1.5;">{rest[:150]}{"..." if len(rest)>150 else ""}</span><br>'
+                    f'{_esc(detail_line)}<br>'
+                    f'<span style="font-size:.78rem;color:var(--text3);line-height:1.5;">{_esc(rest[:150])}{"..." if len(rest)>150 else ""}</span><br>'
                     f'<span style="font-size:.7rem;color:var(--text3);opacity:.6;">Retries: {resp.retry_count}</span>'
                     f'</div></div>',
                     unsafe_allow_html=True,

@@ -45,7 +45,7 @@ Edit `.env` and set at least one of:
 - `OPENAI_API_KEY` — for GPT-4o, GPT-4o-mini, GPT-4-turbo
 - `ANTHROPIC_API_KEY` — for Claude 3.5 Sonnet, Claude 3 Opus/Haiku
 - `GEMINI_API_KEY` — for Gemini 2.0 Flash, Gemini 1.5 Pro
-- `GROQ_API_KEY` — for Llama 3.1 70B/8B, Mixtral, Gemma2 (fast & free tier)
+- `GROQ_API_KEY` — for Llama 3.3 70B, Llama 3.1 8B, Gemma2 (fast & free tier)
 - `MISTRAL_API_KEY` — for Mistral Large/Medium/Small
 - `COHERE_API_KEY` — for Command R+, Command R
 
@@ -130,8 +130,11 @@ You can guide persona generation with free-text constraints:
 
 ## Running Tests
 
+Install the dev dependencies (which include `pytest`), then run the suite:
+
 ```bash
 cd synthsurvey
+pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
@@ -186,7 +189,7 @@ streamlit run app.py
 | **OpenAI** | GPT-4o, GPT-4o-mini, GPT-4-turbo, GPT-3.5-turbo | No |
 | **Anthropic** | Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku | No |
 | **Google Gemini** | Gemini 2.0 Flash, 2.0 Flash Lite, 1.5 Pro, 1.5 Flash | Yes (limited) |
-| **Groq** | Llama 3.1 70B, Llama 3.1 8B, Mixtral 8x7B, Gemma2 9B | Yes (generous) |
+| **Groq** | Llama 3.3 70B, Llama 3.1 8B, Gemma2 9B | Yes (generous) |
 | **Mistral** | Mistral Large, Medium, Small, Mixtral 8x22B | No |
 | **Cohere** | Command R+, Command R, Command Light | Yes (limited) |
 

@@ -1,17 +1,19 @@
-streamlit>=1.28.0
-pandas>=2.1.0
-plotly>=5.18.0
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
-python-dotenv>=1.0.0
-openai>=1.6.0
-anthropic>=0.8.0
-google-generativeai>=0.4.0
-groq>=0.4.0
-mistralai>=1.0.0
-cohere>=5.0.0
-openpyxl>=3.1.0
-gspread>=5.12.0
-google-auth>=2.25.0
+# Runtime dependencies. Version ranges are capped below the next major so a
+# fresh deploy can't silently pull a breaking release. Bump deliberately.
+streamlit>=1.28.0,<2
+pandas>=2.1.0,<3
+plotly>=5.18.0,<6
+requests>=2.31.0,<3
+beautifulsoup4>=4.12.0,<5
+pydantic>=2.5.0,<3
+pydantic-settings>=2.1.0,<3
+python-dotenv>=1.0.0,<2
+openai>=1.6.0,<2
+anthropic>=0.39.0,<1
+google-genai>=0.3.0,<2
+groq>=0.4.0,<1
+mistralai>=1.0.0,<2
+cohere>=5.0.0,<6
+openpyxl>=3.1.0,<4
+gspread>=5.12.0,<7
+google-auth>=2.25.0,<3

@@ -22,3 +22,6 @@ env/
 
 .streamlit/secrets.toml
 credentials.json
+
+# Interrupted-run checkpoints (see services/generation.py)
+.synthsurvey_checkpoints/

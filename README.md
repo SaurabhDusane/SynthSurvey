@@ -4,12 +4,9 @@ Generate realistic synthetic survey responses from any Google Form using LLM-pow
 
 ## Live Demo
 
-| Platform | Link | Status |
-|----------|------|--------|
-| **Streamlit Cloud** | [synthsurvey.streamlit.app](https://synthsurvey.streamlit.app) | May sleep after inactivity |
-| **Render.com** | [synthsurvey.onrender.com](https://synthsurvey.onrender.com) | Always online (backup) |
-
-> **Note:** Replace the placeholder URLs above with your actual deployment URLs after deploying.
+No hosted demo is currently published. See [Deployment](#deployment) to run
+your own in a couple of minutes on Streamlit Community Cloud, Render, or
+locally. Once deployed, add your URL here.
 
 ## Features
 
@@ -159,7 +156,7 @@ python -m pytest tests/ -v
    ```
 5. Click **Deploy**
 
-> ⚠️ Streamlit Cloud apps sleep after ~7 days of inactivity and may take a few seconds to wake up.
+> ⚠️ Streamlit Community Cloud apps go to sleep after a period of inactivity and take a few seconds to wake up on the next visit.
 
 ### Option 2: Render.com (Free — Always Online)
 
@@ -204,4 +201,5 @@ The app displays estimated API costs before generation begins. Rough estimates p
 
 ## License
 
-For academic and hackathon use.
+Released under the [MIT License](LICENSE). Free for academic, hackathon,
+and commercial use with attribution.

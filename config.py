@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import Optional
 
+from providers import PROVIDERS
+
 _PROJECT_DIR = Path(__file__).parent
 _ENV_FILE = _PROJECT_DIR / ".env"
 
@@ -24,15 +26,13 @@ class Settings(BaseSettings):
     # Default LLM provider
     llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
 
-    # Model names
-    openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
-    anthropic_model: str = Field(
-        default="claude-3-5-sonnet-20241022", alias="ANTHROPIC_MODEL"
-    )
-    gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
-    groq_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_MODEL")
-    mistral_model: str = Field(default="mistral-large-latest", alias="MISTRAL_MODEL")
-    cohere_model: str = Field(default="command-r-plus", alias="COHERE_MODEL")
+    # Model names (defaults come from the central provider registry)
+    openai_model: str = Field(default=PROVIDERS["openai"].default_model, alias="OPENAI_MODEL")
+    anthropic_model: str = Field(default=PROVIDERS["anthropic"].default_model, alias="ANTHROPIC_MODEL")
+    gemini_model: str = Field(default=PROVIDERS["gemini"].default_model, alias="GEMINI_MODEL")
+    groq_model: str = Field(default=PROVIDERS["groq"].default_model, alias="GROQ_MODEL")
+    mistral_model: str = Field(default=PROVIDERS["mistral"].default_model, alias="MISTRAL_MODEL")
+    cohere_model: str = Field(default=PROVIDERS["cohere"].default_model, alias="COHERE_MODEL")
 
     # Generation settings
     temperature: float = Field(default=0.7, alias="TEMPERATURE")

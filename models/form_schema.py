@@ -118,6 +118,10 @@ class FormSchema(BaseModel):
         default_factory=list, description="Sections/pages in the form"
     )
     total_questions: int = Field(default=0, description="Total number of questions")
+    parse_method: str = Field(
+        default="structured",
+        description="How the form was parsed: 'structured' or 'html_fallback'",
+    )
 
     def model_post_init(self, __context: Any) -> None:
         """Set total_questions after initialization."""

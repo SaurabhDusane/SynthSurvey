@@ -181,14 +181,12 @@ _PROVIDER_PRICING = {
 }
 
 
-# Provider-to-key/model mapping
+# Provider-to-key/model mapping, derived from the central provider registry.
+from providers import PROVIDERS as _PROVIDERS
+
 _PROVIDER_META = {
-    "openai":    {"key_attr": "openai_api_key",    "model_attr": "openai_model"},
-    "anthropic": {"key_attr": "anthropic_api_key", "model_attr": "anthropic_model"},
-    "gemini":    {"key_attr": "gemini_api_key",    "model_attr": "gemini_model"},
-    "groq":      {"key_attr": "groq_api_key",      "model_attr": "groq_model"},
-    "mistral":   {"key_attr": "mistral_api_key",   "model_attr": "mistral_model"},
-    "cohere":    {"key_attr": "cohere_api_key",    "model_attr": "cohere_model"},
+    pid: {"key_attr": spec.key_attr, "model_attr": spec.model_attr}
+    for pid, spec in _PROVIDERS.items()
 }
 
 

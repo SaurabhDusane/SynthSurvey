@@ -4,7 +4,6 @@ import sys
 import os
 import time
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from html import escape as _esc
 from pathlib import Path
@@ -19,15 +18,15 @@ import plotly.graph_objects as go
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import get_settings, Settings
+from providers import PROVIDERS, PROVIDER_IDS
 from models.form_schema import FormSchema, QuestionType
 from models.persona import Persona
 from models.response import GeneratedResponse, SurveyDataset
 from parsers.google_form_parser import GoogleFormParser
-from generators.persona_generator import PersonaGenerator
-from generators.response_generator import ResponseGenerator
+from services.generation import GenerationService, peek_checkpoint
 from exporters.csv_exporter import CSVExporter
 from exporters.json_exporter import JSONExporter
-from utils.llm_client import LLMClient, RateLimiter, classify_error
+from utils.llm_client import LLMClient
 from utils.validators import ResponseValidator
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
@@ -41,415 +40,19 @@ st.set_page_config(
 
 # ─── Custom CSS ───────────────────────────────────────────────────────────────
 
-CUSTOM_CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@st.cache_data
+def _load_css() -> str:
+    """Load the stylesheet from the static file (cached across reruns)."""
+    return (Path(__file__).parent / "static" / "styles.css").read_text(encoding="utf-8")
 
-/* ── Custom Cursor (Google Forms icon) ───────────────────────────── */
-* {
-    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z' fill='%23673AB7'/%3E%3Cpath d='M14 2v6h6' fill='%23B39DDB'/%3E%3Cpath d='M14 2l6 6' stroke='%235E35B1' stroke-width='.4' fill='none'/%3E%3Ccircle cx='8.5' cy='12.5' r='1.2' fill='%23fff'/%3E%3Crect x='11' y='11.8' width='5.5' height='1.4' rx='.7' fill='%23fff' opacity='.85'/%3E%3Ccircle cx='8.5' cy='16' r='1.2' fill='%23fff'/%3E%3Crect x='11' y='15.3' width='5.5' height='1.4' rx='.7' fill='%23fff' opacity='.85'/%3E%3C/svg%3E") 3 1, auto !important;
-}
-a, button, [role="button"], .stButton>button, input, textarea, select,
-[data-testid="stFileUploader"], .stSelectbox, .stMultiSelect {
-    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z' fill='%237B1FA2'/%3E%3Cpath d='M14 2v6h6' fill='%23CE93D8'/%3E%3Cpath d='M14 2l6 6' stroke='%236A1B9A' stroke-width='.4' fill='none'/%3E%3Ccircle cx='8.5' cy='12.5' r='1.2' fill='%23fff'/%3E%3Crect x='11' y='11.8' width='5.5' height='1.4' rx='.7' fill='%23fff' opacity='.85'/%3E%3Ccircle cx='8.5' cy='16' r='1.2' fill='%23fff'/%3E%3Crect x='11' y='15.3' width='5.5' height='1.4' rx='.7' fill='%23fff' opacity='.85'/%3E%3Cpath d='M12 20h9' stroke='%23fff' stroke-width='1.6' stroke-linecap='round' opacity='.9'/%3E%3C/svg%3E") 3 1, pointer !important;
-}
 
-/* ── CSS Variables ─────────────────────────────────────────────────── */
-:root {
-    --bg-primary: #0c0a09;
-    --bg-card: rgba(255,245,230,0.02);
-    --bg-glass: rgba(255,245,230,0.035);
-    --border-glass: rgba(255,200,120,0.08);
-    --accent: #F59E0B;
-    --accent2: #FB923C;
-    --accent3: #14B8A6;
-    --accent4: #F472B6;
-    --text1: #FAF5EF;
-    --text2: #B8A99A;
-    --text3: #6B5E52;
-    --radius: 14px;
-    --radius-lg: 22px;
-    --smooth: all 0.35s cubic-bezier(.25,.46,.45,.94);
-}
-
-/* ── Global ────────────────────────────────────────────────────────── */
-.stApp {
-    background: var(--bg-primary) !important;
-    font-family: 'Inter', -apple-system, sans-serif !important;
-    color: var(--text1) !important;
-}
-.stApp::before {
-    content: '';
-    position: fixed; inset: 0;
-    background:
-        radial-gradient(ellipse at 15% 50%, rgba(245,158,11,0.06) 0%, transparent 50%),
-        radial-gradient(ellipse at 85% 20%, rgba(251,146,60,0.05) 0%, transparent 50%),
-        radial-gradient(ellipse at 50% 85%, rgba(20,184,166,0.04) 0%, transparent 50%);
-    pointer-events: none; z-index: 0;
-    animation: bgPulse 20s ease-in-out infinite alternate;
-}
-@keyframes bgPulse { 0%{opacity:1} 50%{opacity:.7} 100%{opacity:1} }
-
-.main .block-container {
-    animation: fadeIn .45s ease-out;
-    padding-top: 2rem !important;
-}
-@keyframes fadeIn { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
-
-/* ── Sidebar ───────────────────────────────────────────────────────── */
-section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg,#0f0c09,#12100d) !important;
-    border-right: 1px solid var(--border-glass) !important;
-}
-section[data-testid="stSidebar"] * { color: var(--text2) !important; }
-section[data-testid="stSidebar"] h1,
-section[data-testid="stSidebar"] h2,
-section[data-testid="stSidebar"] h3 { color: var(--text1) !important; }
-
-/* ── Typography ────────────────────────────────────────────────────── */
-h1,h2,h3,h4,h5,h6 {
-    font-family:'Inter',sans-serif !important;
-    font-weight:700 !important;
-    color:var(--text1) !important;
-    letter-spacing:-0.02em !important;
-}
-h1 { font-size:2.2rem !important; font-weight:800 !important; }
-p,li,span,div { color:var(--text1) !important; }
-
-/* ── Buttons ───────────────────────────────────────────────────────── */
-.stButton>button {
-    background: linear-gradient(135deg,rgba(245,158,11,.12),rgba(20,184,166,.08)) !important;
-    color:var(--text1) !important;
-    border:1px solid rgba(245,158,11,.18) !important;
-    border-radius: var(--radius) !important;
-    padding:.65rem 1.5rem !important;
-    font-weight:600 !important; font-family:'Inter',sans-serif !important;
-    font-size:.9rem !important;
-    transition: var(--smooth) !important;
-    box-shadow: 0 1px 8px rgba(0,0,0,.15) !important;
-    letter-spacing:.01em !important;
-    backdrop-filter:blur(8px) !important;
-}
-.stButton>button:hover {
-    transform:translateY(-2px) !important;
-    box-shadow: 0 4px 18px rgba(245,158,11,.15) !important;
-    background: linear-gradient(135deg,rgba(245,158,11,.2),rgba(20,184,166,.12)) !important;
-    border-color:rgba(245,158,11,.3) !important;
-}
-.stButton>button:active { transform:translateY(0) !important; }
-.stButton>button[disabled] {
-    background:rgba(255,255,255,.05) !important;
-    color:var(--text3) !important; box-shadow:none !important;
-}
-
-/* ── Inputs ────────────────────────────────────────────────────────── */
-.stTextInput>div>div>input,
-.stTextArea>div>div>textarea,
-.stNumberInput>div>div>input {
-    background:var(--bg-glass) !important;
-    border:1px solid var(--border-glass) !important;
-    border-radius:var(--radius) !important;
-    color:var(--text1) !important;
-    font-family:'Inter',sans-serif !important;
-    padding:.75rem 1rem !important;
-    transition:var(--smooth) !important;
-}
-.stTextInput>div>div>input:focus,
-.stTextArea>div>div>textarea:focus,
-.stNumberInput>div>div>input:focus {
-    border-color:var(--accent) !important;
-    box-shadow:0 0 0 3px rgba(245,158,11,.15) !important;
-}
-.stTextInput>div>div>input::placeholder,
-.stTextArea>div>div>textarea::placeholder { color:var(--text3) !important; }
-label,.stTextInput label,.stTextArea label,.stNumberInput label,
-.stSelectbox label,.stFileUploader label {
-    color:var(--text2) !important; font-weight:500 !important;
-    font-size:.82rem !important; letter-spacing:.03em !important;
-    text-transform:uppercase !important;
-}
-
-/* ── Selectbox ─────────────────────────────────────────────────────── */
-.stSelectbox>div>div {
-    background:var(--bg-glass) !important;
-    border:1px solid var(--border-glass) !important;
-    border-radius:var(--radius) !important;
-}
-
-/* ── Metrics ───────────────────────────────────────────────────────── */
-[data-testid="stMetric"] {
-    background:var(--bg-glass) !important;
-    border:1px solid var(--border-glass) !important;
-    border-radius:var(--radius) !important;
-    padding:1.1rem 1rem !important;
-    transition:var(--smooth) !important;
-    backdrop-filter:blur(10px) !important;
-}
-[data-testid="stMetric"]:hover {
-    border-color:rgba(245,158,11,.2) !important;
-    box-shadow:0 0 30px rgba(245,158,11,.1) !important;
-    transform:translateY(-2px);
-}
-[data-testid="stMetricValue"] {
-    font-family:'Inter',sans-serif !important; font-weight:800 !important;
-    font-size:1.7rem !important;
-    background:linear-gradient(135deg,var(--accent),var(--accent3)) !important;
-    -webkit-background-clip:text !important;
-    -webkit-text-fill-color:transparent !important;
-    background-clip:text !important;
-}
-[data-testid="stMetricLabel"] {
-    color:var(--text2) !important; font-weight:500 !important;
-    text-transform:uppercase !important; font-size:.72rem !important;
-    letter-spacing:.08em !important;
-}
-
-/* ── Expanders ─────────────────────────────────────────────────────── */
-.streamlit-expanderHeader {
-    background:var(--bg-glass) !important;
-    border:1px solid var(--border-glass) !important;
-    border-radius:var(--radius) !important;
-    color:var(--text1) !important; font-weight:500 !important;
-    transition:var(--smooth) !important;
-}
-.streamlit-expanderHeader:hover {
-    border-color:rgba(245,158,11,.2) !important;
-    background:rgba(255,255,255,.05) !important;
-}
-.streamlit-expanderContent {
-    background:rgba(255,255,255,.02) !important;
-    border:1px solid var(--border-glass) !important;
-    border-top:none !important;
-    border-radius:0 0 var(--radius) var(--radius) !important;
-}
-
-/* ── Tabs ──────────────────────────────────────────────────────────── */
-.stTabs [data-baseweb="tab-list"] {
-    gap:6px !important; background:transparent !important;
-    border-bottom:1px solid var(--border-glass) !important;
-}
-.stTabs [data-baseweb="tab"] {
-    background:transparent !important; color:var(--text2) !important;
-    border-radius:var(--radius) var(--radius) 0 0 !important;
-    padding:.7rem 1.4rem !important; font-weight:500 !important;
-    transition:var(--smooth) !important; border:none !important;
-}
-.stTabs [data-baseweb="tab"]:hover { color:var(--text1) !important; background:var(--bg-glass) !important; }
-.stTabs [aria-selected="true"] {
-    background:var(--bg-glass) !important; color:var(--accent) !important;
-    border-bottom:2px solid var(--accent) !important;
-}
-
-/* ── Progress bar ──────────────────────────────────────────────────── */
-.stProgress>div>div>div>div {
-    background:linear-gradient(90deg,var(--accent),var(--accent3),var(--accent2)) !important;
-    background-size:200% 100% !important;
-    animation:progGlow 2s ease-in-out infinite !important;
-    border-radius:20px !important;
-}
-@keyframes progGlow { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
-
-/* ── Dividers ──────────────────────────────────────────────────────── */
-hr {
-    border:none !important; height:1px !important;
-    background:linear-gradient(90deg,transparent,var(--border-glass),rgba(245,158,11,.2),var(--border-glass),transparent) !important;
-    margin:1.8rem 0 !important;
-}
-
-/* ── File uploader ─────────────────────────────────────────────────── */
-[data-testid="stFileUploader"] {
-    background:var(--bg-glass) !important;
-    border:1px dashed var(--border-glass) !important;
-    border-radius:var(--radius) !important;
-    padding:1rem !important; transition:var(--smooth) !important;
-}
-[data-testid="stFileUploader"]:hover {
-    border-color:var(--accent) !important;
-}
-
-/* ── Download buttons ──────────────────────────────────────────────── */
-.stDownloadButton>button {
-    background:linear-gradient(135deg,#1a1510,#1c1812) !important;
-    border:1px solid var(--border-glass) !important;
-    color:var(--text1) !important; border-radius:var(--radius) !important;
-    transition:var(--smooth) !important;
-}
-.stDownloadButton>button:hover {
-    border-color:var(--accent3) !important;
-    box-shadow:0 4px 15px rgba(20,184,166,.2) !important;
-    transform:translateY(-2px) !important;
-}
-
-/* ── Scrollbar ─────────────────────────────────────────────────────── */
-::-webkit-scrollbar { width:5px; height:5px; }
-::-webkit-scrollbar-track { background:transparent; }
-::-webkit-scrollbar-thumb { background:rgba(245,158,11,.3); border-radius:10px; }
-::-webkit-scrollbar-thumb:hover { background:rgba(245,158,11,.5); }
-
-/* ── Custom Components ─────────────────────────────────────────────── */
-.hero-title {
-    font-size:3rem; font-weight:900; letter-spacing:-0.03em; line-height:1.1;
-    margin-bottom:.4rem;
-    background:linear-gradient(135deg,#F59E0B 0%,#FB923C 40%,#14B8A6 100%);
-    -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-    background-clip:text; background-size:200% 200%;
-    animation:gradText 6s ease-in-out infinite alternate;
-}
-@keyframes gradText { 0%{background-position:0% 50%} 100%{background-position:100% 50%} }
-
-.hero-sub { font-size:1.1rem; color:var(--text2); line-height:1.6; max-width:580px; }
-
-.glass-card {
-    background:var(--bg-glass); backdrop-filter:blur(16px);
-    border:1px solid var(--border-glass); border-radius:var(--radius-lg);
-    padding:1.8rem; transition:var(--smooth); position:relative; overflow:hidden;
-}
-.glass-card::before {
-    content:''; position:absolute; top:0;left:0;right:0; height:1px;
-    background:linear-gradient(90deg,transparent,rgba(255,255,255,.08),transparent);
-}
-.glass-card:hover {
-    border-color:rgba(245,158,11,.15);
-    box-shadow:0 0 35px rgba(245,158,11,.08);
-    transform:translateY(-2px);
-}
-
-.step-badge {
-    display:inline-flex; align-items:center; justify-content:center;
-    width:32px; height:32px; border-radius:50%; flex-shrink:0;
-    background:linear-gradient(135deg,var(--accent),var(--accent2));
-    color:#fff; font-weight:700; font-size:.82rem; margin-right:10px;
-    box-shadow:0 3px 10px rgba(245,158,11,.3);
-}
-.step-row { display:flex; align-items:center; padding:.6rem 0; color:var(--text2); font-size:.9rem; }
-
-.persona-card-v2 {
-    background:linear-gradient(135deg,rgba(245,158,11,.06),rgba(20,184,166,.04));
-    border:1px solid rgba(245,158,11,.1); border-radius:var(--radius-lg);
-    padding:1.4rem; margin-bottom:.8rem; position:relative; overflow:hidden;
-    transition:var(--smooth);
-}
-.persona-card-v2::before {
-    content:''; position:absolute; top:0;left:0; width:3px; height:100%;
-    background:linear-gradient(180deg,var(--accent),var(--accent2));
-    border-radius:3px 0 0 3px;
-}
-.persona-card-v2:hover { border-color:rgba(245,158,11,.2); box-shadow:0 6px 25px rgba(245,158,11,.08); }
-.persona-name { font-size:1.1rem; font-weight:700; color:var(--text1); margin-bottom:.4rem; }
-.persona-detail { font-size:.85rem; color:var(--text2); line-height:1.65; }
-.persona-tag {
-    display:inline-block; background:rgba(245,158,11,.1); color:var(--accent);
-    padding:2px 9px; border-radius:16px; font-size:.75rem; font-weight:500; margin:2px;
-}
-
-.response-card {
-    background:rgba(20,184,166,.04); border:1px solid rgba(20,184,166,.1);
-    border-radius:var(--radius-lg); padding:1.4rem;
-}
-
-.chip {
-    display:inline-flex; align-items:center; gap:5px;
-    background:rgba(245,158,11,.08); border:1px solid rgba(245,158,11,.1);
-    border-radius:16px; padding:3px 12px; font-size:.78rem; font-weight:500;
-    color:var(--accent); margin:2px; transition:var(--smooth);
-}
-.chip:hover { background:rgba(245,158,11,.15); transform:scale(1.03); }
-
-.stat-glow {
-    text-align:center; padding:1.3rem; background:var(--bg-glass);
-    border:1px solid var(--border-glass); border-radius:var(--radius-lg);
-    transition:var(--smooth);
-}
-.stat-glow:hover { border-color:rgba(245,158,11,.2); box-shadow:0 0 30px rgba(245,158,11,.1); transform:translateY(-2px); }
-.stat-glow .sn {
-    font-size:2.2rem; font-weight:800;
-    background:linear-gradient(135deg,var(--accent),var(--accent3));
-    -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
-}
-.stat-glow .sl {
-    font-size:.72rem; color:var(--text3); text-transform:uppercase;
-    letter-spacing:.1em; font-weight:600; margin-top:3px;
-}
-
-.disclaimer-v2 {
-    background:rgba(245,158,11,.05); border:1px solid rgba(245,158,11,.1);
-    border-radius:var(--radius); padding:10px 14px; color:var(--accent);
-    font-size:.8rem; line-height:1.5;
-}
-
-.section-label {
-    font-size:.68rem; font-weight:700; text-transform:uppercase;
-    letter-spacing:.14em; color:var(--text3); margin-bottom:.6rem; margin-top:1.2rem;
-}
-
-/* ── Particles ─────────────────────────────────────────────────────── */
-.particles { position:fixed; inset:0; pointer-events:none; z-index:0; overflow:hidden; }
-.p { position:absolute; width:2px; height:2px; border-radius:50%; opacity:.15; animation:fl 18s infinite ease-in-out; }
-.p:nth-child(1){left:8%;background:var(--accent);animation-duration:16s}
-.p:nth-child(2){left:22%;background:var(--accent2);animation-delay:-4s;animation-duration:20s}
-.p:nth-child(3){left:40%;background:var(--accent3);animation-delay:-7s;animation-duration:22s}
-.p:nth-child(4){left:58%;background:var(--accent);animation-delay:-10s;animation-duration:17s}
-.p:nth-child(5){left:75%;background:var(--accent4);animation-delay:-3s;animation-duration:21s}
-.p:nth-child(6){left:90%;background:var(--accent2);animation-delay:-8s;animation-duration:19s}
-@keyframes fl { 0%{transform:translateY(100vh) scale(0);opacity:0} 10%{opacity:.2} 90%{opacity:.08} 100%{transform:translateY(-5vh) scale(1.5);opacity:0} }
-
-/* ── Quality Score Badge ─────────────────────────────────────────── */
-.quality-badge {
-    display:inline-flex; align-items:center; gap:6px;
-    padding:6px 14px; border-radius:20px; font-size:.8rem; font-weight:600;
-    transition:var(--smooth);
-}
-.quality-high { background:rgba(20,184,166,.12); color:#14B8A6; border:1px solid rgba(20,184,166,.2); }
-.quality-med  { background:rgba(245,158,11,.12); color:#F59E0B; border:1px solid rgba(245,158,11,.2); }
-.quality-low  { background:rgba(239,68,68,.12); color:#EF4444; border:1px solid rgba(239,68,68,.2); }
-
-/* ── Keyboard Shortcut Keys ─────────────────────────────────────── */
-.kbd {
-    display:inline-block; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1);
-    border-radius:6px; padding:2px 8px; font-family:'JetBrains Mono',monospace;
-    font-size:.72rem; color:var(--text2); font-weight:500;
-    box-shadow:0 1px 2px rgba(0,0,0,.2);
-}
-
-/* ── Footer ───────────────────────────────────────────────────── */
-.app-footer {
-    margin-top:3rem; padding:1.5rem 0; text-align:center;
-    border-top:1px solid var(--border-glass);
-}
-.app-footer .footer-links {
-    display:flex; justify-content:center; gap:1.5rem; flex-wrap:wrap;
-    margin-bottom:.8rem;
-}
-.app-footer .footer-links a {
-    color:var(--text3) !important; font-size:.8rem; font-weight:500;
-    text-decoration:none !important; border:none !important;
-    transition:var(--smooth);
-}
-.app-footer .footer-links a:hover { color:var(--accent) !important; }
-.app-footer .footer-copy {
-    font-size:.7rem; color:var(--text3); letter-spacing:.03em;
-}
-
-/* ── Feature Card ─────────────────────────────────────────────── */
-.feature-card {
-    background:var(--bg-glass); border:1px solid var(--border-glass);
-    border-radius:var(--radius-lg); padding:1.2rem; text-align:center;
-    transition:var(--smooth);
-}
-.feature-card:hover {
-    border-color:rgba(245,158,11,.15);
-    box-shadow:0 0 25px rgba(245,158,11,.06);
-    transform:translateY(-2px);
-}
-.feature-icon { font-size:1.6rem; margin-bottom:.4rem; }
-.feature-title { font-weight:700; font-size:.88rem; color:var(--text1); margin-bottom:.2rem; }
-.feature-desc { font-size:.76rem; color:var(--text3); line-height:1.4; }
-</style>
-
-<div class="particles"><div class="p"></div><div class="p"></div><div class="p"></div><div class="p"></div><div class="p"></div><div class="p"></div></div>
-"""
-
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+st.markdown(f"<style>{_load_css()}</style>", unsafe_allow_html=True)
+st.markdown(
+    '<div class="particles">'
+    '<div class="p"></div><div class="p"></div><div class="p"></div>'
+    '<div class="p"></div><div class="p"></div><div class="p"></div></div>',
+    unsafe_allow_html=True,
+)
 
 # ─── Session State ────────────────────────────────────────────────────────────
 
@@ -471,18 +74,6 @@ def init_session_state():
         "generated_count": 0,
         "failed_count": 0,
         "results_df": None,
-        "api_key_openai": "",
-        "api_key_anthropic": "",
-        "api_key_gemini": "",
-        "api_key_groq": "",
-        "api_key_mistral": "",
-        "api_key_cohere": "",
-        "openai_model": "gpt-4o",
-        "anthropic_model": "claude-3-5-sonnet-20241022",
-        "gemini_model": "gemini-2.0-flash",
-        "groq_model": "llama-3.3-70b-versatile",
-        "mistral_model": "mistral-large-latest",
-        "cohere_model": "command-r-plus",
         "temperature": 0.7,
         "api_call_delay": 0.5,
         "concurrency": 4,
@@ -490,6 +81,10 @@ def init_session_state():
         "generation_report": [],
         "stop_generation": False,
     }
+    # Per-provider API key + model defaults, from the central registry.
+    for spec in PROVIDERS.values():
+        defaults[spec.session_key] = ""
+        defaults[spec.model_attr] = spec.default_model
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -538,59 +133,34 @@ with st.sidebar:
 
     st.markdown('<div class="section-label">API Configuration</div>', unsafe_allow_html=True)
 
-    _PROVIDERS = ["openai", "anthropic", "gemini", "groq", "mistral", "cohere"]
-    _PROVIDER_LABELS = {
-        "openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Google Gemini",
-        "groq": "Groq (Llama)", "mistral": "Mistral AI", "cohere": "Cohere",
-    }
     provider = st.selectbox(
         "LLM Provider",
-        _PROVIDERS,
-        format_func=lambda x: _PROVIDER_LABELS[x],
-        index=_PROVIDERS.index(st.session_state.llm_provider)
-        if st.session_state.llm_provider in _PROVIDERS else 0,
+        PROVIDER_IDS,
+        format_func=lambda x: PROVIDERS[x].label,
+        index=PROVIDER_IDS.index(st.session_state.llm_provider)
+        if st.session_state.llm_provider in PROVIDER_IDS else 0,
         key="sidebar_provider",
         label_visibility="collapsed",
     )
     st.session_state.llm_provider = provider
+    spec = PROVIDERS[provider]
 
-    _KEY_CONFIG = {
-        "openai":    ("api_key_openai",    "OpenAI API Key",    "sk-..."),
-        "anthropic": ("api_key_anthropic", "Anthropic API Key", "sk-ant-..."),
-        "gemini":    ("api_key_gemini",    "Gemini API Key",    "AIza..."),
-        "groq":      ("api_key_groq",      "Groq API Key",      "gsk_..."),
-        "mistral":   ("api_key_mistral",   "Mistral API Key",   "..."),
-        "cohere":    ("api_key_cohere",    "Cohere API Key",    "..."),
-    }
-    key_attr, key_label, key_placeholder = _KEY_CONFIG[provider]
+    key_attr = spec.session_key
     api_key = st.text_input(
-        key_label, type="password",
+        f"{spec.label} API Key", type="password",
         value=st.session_state[key_attr],
-        key=f"sidebar_key_{provider}", placeholder=key_placeholder,
+        key=f"sidebar_key_{provider}", placeholder=spec.key_placeholder,
     )
     st.session_state[key_attr] = api_key
 
     st.markdown('<div class="section-label">Model Settings</div>', unsafe_allow_html=True)
 
-    _MODEL_OPTIONS = {
-        "openai":    ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-        "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"],
-        "gemini":    ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro-latest", "gemini-1.5-flash-latest"],
-        "groq":      ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"],
-        "mistral":   ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "open-mixtral-8x22b"],
-        "cohere":    ["command-r-plus", "command-r", "command-light"],
-    }
-    _MODEL_STATE_KEY = {
-        "openai": "openai_model", "anthropic": "anthropic_model",
-        "gemini": "gemini_model", "groq": "groq_model",
-        "mistral": "mistral_model", "cohere": "cohere_model",
-    }
-    model_options = _MODEL_OPTIONS[provider]
-    model_state_key = _MODEL_STATE_KEY[provider]
+    model_options = list(spec.models)
+    model_state_key = spec.model_attr
     current_model = st.session_state[model_state_key]
     model_idx = model_options.index(current_model) if current_model in model_options else 0
     selected_model = st.selectbox(
-        f"{_PROVIDER_LABELS[provider]} Model",
+        f"{spec.label} Model",
         model_options,
         index=model_idx,
         key=f"sidebar_model_{provider}",
@@ -676,27 +246,12 @@ def get_llm_settings() -> Settings:
     """Build Settings object from session state."""
     settings = get_settings()
     settings.llm_provider = st.session_state.llm_provider
-    # Map all provider keys and models from session state
-    _key_map = {
-        "openai": ("openai_api_key", "openai_model"),
-        "anthropic": ("anthropic_api_key", "anthropic_model"),
-        "gemini": ("gemini_api_key", "gemini_model"),
-        "groq": ("groq_api_key", "groq_model"),
-        "mistral": ("mistral_api_key", "mistral_model"),
-        "cohere": ("cohere_api_key", "cohere_model"),
-    }
-    _session_key_map = {
-        "openai": "api_key_openai", "anthropic": "api_key_anthropic",
-        "gemini": "api_key_gemini", "groq": "api_key_groq",
-        "mistral": "api_key_mistral", "cohere": "api_key_cohere",
-    }
-    for prov, (settings_key_attr, settings_model_attr) in _key_map.items():
-        session_key = _session_key_map[prov]
-        if st.session_state.get(session_key):
-            setattr(settings, settings_key_attr, st.session_state[session_key])
-        model_state = f"{prov}_model"
-        if st.session_state.get(model_state):
-            setattr(settings, settings_model_attr, st.session_state[model_state])
+    # Map all provider keys and models from session state via the registry.
+    for spec in PROVIDERS.values():
+        if st.session_state.get(spec.session_key):
+            setattr(settings, spec.key_attr, st.session_state[spec.session_key])
+        if st.session_state.get(spec.model_attr):
+            setattr(settings, spec.model_attr, st.session_state[spec.model_attr])
     settings.temperature = st.session_state.temperature
     settings.api_call_delay = st.session_state.api_call_delay
     settings.concurrency = st.session_state.concurrency
@@ -706,17 +261,10 @@ def get_llm_settings() -> Settings:
 
 def check_api_key() -> bool:
     """Check if the required API key is set."""
-    prov = st.session_state.llm_provider
-    _env_keys = {
-        "openai": ("api_key_openai", "OPENAI_API_KEY"),
-        "anthropic": ("api_key_anthropic", "ANTHROPIC_API_KEY"),
-        "gemini": ("api_key_gemini", "GEMINI_API_KEY"),
-        "groq": ("api_key_groq", "GROQ_API_KEY"),
-        "mistral": ("api_key_mistral", "MISTRAL_API_KEY"),
-        "cohere": ("api_key_cohere", "COHERE_API_KEY"),
-    }
-    session_attr, env_var = _env_keys.get(prov, ("", ""))
-    return bool(st.session_state.get(session_attr) or os.environ.get(env_var, ""))
+    spec = PROVIDERS.get(st.session_state.llm_provider)
+    if spec is None:
+        return False
+    return bool(st.session_state.get(spec.session_key) or os.environ.get(spec.env_var, ""))
 
 
 def _type_icon(qt: QuestionType) -> str:
@@ -772,16 +320,14 @@ def render_input_page():
             st.session_state.num_responses = num_responses
         with sc2:
             st.markdown("##### Provider")
-            _prov_display = {
-                "openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini",
-                "groq": "Groq (Llama)", "mistral": "Mistral", "cohere": "Cohere",
-            }
-            _model_key = f"{st.session_state.llm_provider}_model"
-            prov_label = f"{_prov_display.get(st.session_state.llm_provider, 'Unknown')} · {st.session_state.get(_model_key, '')}"
+            _spec = PROVIDERS.get(st.session_state.llm_provider)
+            _prov_name = _spec.short_label if _spec else "Unknown"
+            _model_val = st.session_state.get(_spec.model_attr, "") if _spec else ""
+            prov_label = f"{_prov_name} · {_model_val}"
             st.markdown(
                 f'<div style="padding:.6rem 1rem;background:var(--bg-glass);'
                 f'border:1px solid var(--border-glass);border-radius:var(--radius);'
-                f'font-size:.88rem;color:var(--text2);margin-top:2px;">{prov_label}</div>',
+                f'font-size:.88rem;color:var(--text2);margin-top:2px;">{_esc(prov_label)}</div>',
                 unsafe_allow_html=True,
             )
 
@@ -963,6 +509,13 @@ def render_preview_page():
     if schema.form_description:
         st.markdown(f"*{schema.form_description}*")
 
+    if getattr(schema, "parse_method", "structured") == "html_fallback":
+        st.warning(
+            "This form's structured data couldn't be read, so it was parsed "
+            "from the page HTML instead. Question types, options, and scales "
+            "may be incomplete — review the detected questions below carefully."
+        )
+
     st.divider()
 
     required = sum(1 for q in schema.questions if q.is_required)
@@ -1101,9 +654,29 @@ def render_generation_page():
                 AI will create unique personas and fill the form as each character.</div>
         </div>
         """, unsafe_allow_html=True)
+        # U1: offer to resume an interrupted run with the same configuration.
+        saved = 0
+        if check_api_key():
+            try:
+                saved = peek_checkpoint(
+                    schema, get_llm_settings(),
+                    st.session_state.persona_constraints or None,
+                )
+            except Exception:
+                saved = 0
+        resume = False
+        if 0 < saved < st.session_state.num_responses:
+            st.info(
+                f"Found {saved} saved responses from an interrupted run with this "
+                f"exact configuration. You can resume where you left off."
+            )
+            resume = st.checkbox("Resume from saved progress", value=True, key="resume_checkbox")
+        st.session_state.resume_generation = resume
+
         bc, _, _ = st.columns([2, 1, 1])
         with bc:
-            if st.button("Begin Generation", type="primary", use_container_width=True):
+            btn_label = "Resume Generation" if resume else "Begin Generation"
+            if st.button(btn_label, type="primary", use_container_width=True):
                 st.session_state.generation_in_progress = True
                 st.rerun()
         return
@@ -1112,29 +685,19 @@ def render_generation_page():
     num_responses = st.session_state.num_responses
     settings = get_llm_settings()
     provider = settings.llm_provider
-    model_attr = f"{provider}_model"
-    model_name = getattr(settings, model_attr, "unknown")
+    model_name = getattr(settings, f"{provider}_model", "unknown")
+    resume = bool(st.session_state.get("resume_generation", False))
 
-    concurrency = max(1, int(getattr(settings, "concurrency", 4)))
-    _rate = (1.0 / settings.api_call_delay) if settings.api_call_delay and settings.api_call_delay > 0 else 0.0
-    rate_limiter = RateLimiter(_rate)
     try:
-        llm = LLMClient(settings, rate_limiter=rate_limiter)
+        service = GenerationService(
+            schema, settings,
+            constraints=st.session_state.persona_constraints or None,
+            resume=resume,
+        )
     except ValueError as e:
         st.error(str(e))
         st.session_state.generation_in_progress = False
         return
-
-    persona_gen = PersonaGenerator(llm, settings)
-    response_gen = ResponseGenerator(llm, settings)
-    dataset = SurveyDataset(
-        form_title=schema.form_title,
-        form_url=schema.form_url,
-        generation_started=datetime.now(timezone.utc).isoformat(),
-    )
-
-    # Report log: list of dicts for every attempt
-    report_log = []
 
     progress_bar = st.progress(0, text="Initializing...")
     sc = st.columns(4)
@@ -1198,115 +761,56 @@ def render_generation_page():
         html += '</div>'
         return html
 
-    constraints = st.session_state.persona_constraints or None
-
-    def _work(i: int) -> dict:
-        """Generate one persona + response. Runs in a worker thread — no
-        Streamlit calls here, only the (thread-safe) generators."""
-        entry = {
-            "response_num": i + 1,
-            "status": "success",
-            "persona_name": None,
-            "error_type": None,
-            "error_message": None,
-            "suggestion": None,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        try:
-            persona = persona_gen.generate_one(schema, constraints)
-            entry["persona_name"] = persona.name
-            response = response_gen.generate_one(persona, schema)
-            if not response.generation_success:
-                entry["status"] = "failed"
-                entry["error_type"] = "Validation Failed"
-                entry["error_message"] = "Response generated but failed validation checks"
-                entry["suggestion"] = "Try lowering temperature or using a more capable model"
-            return {"i": i, "entry": entry, "persona": persona, "response": response}
-        except Exception as e:
-            diag = classify_error(e, provider, model_name)
-            entry["status"] = "failed"
-            entry["error_type"] = diag["error_type"]
-            entry["error_message"] = diag["message"][:300]
-            entry["suggestion"] = diag["suggestion"]
-            return {"i": i, "entry": entry, "persona": None, "response": None}
+    st.session_state.stop_generation = False  # reset flag
+    initial_completed = service.completed_count()
+    if resume and initial_completed > 0:
+        st.info(
+            f"Resuming: {initial_completed} responses already saved — "
+            f"generating the remaining {max(0, num_responses - initial_completed)}."
+        )
 
     start_time = time.time()
-    generated = 0
-    failed = 0
-    completed = 0
-    consecutive_failures = 0
-    _MAX_CONSECUTIVE_FAIL = 10  # stop early if everything is failing
-    st.session_state.stop_generation = False  # reset flag
 
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = {executor.submit(_work, i): i for i in range(num_responses)}
-        for future in as_completed(futures):
-            # User-requested stop (best-effort: cancels not-yet-started work).
-            if st.session_state.stop_generation:
-                for f in futures:
-                    f.cancel()
-                st.warning(f"Generation stopped by user after {completed} of {num_responses}.")
-                break
+    def _should_stop() -> bool:
+        return st.session_state.stop_generation
 
-            result = future.result()
-            entry = result["entry"]
-            persona = result["persona"]
-            response = result["response"]
-            completed += 1
+    for prog in service.run(num_responses, should_stop=_should_stop):
+        if prog.persona is not None:
+            persona_preview.markdown(_persona_html(prog.persona), unsafe_allow_html=True)
+        if prog.response is not None and prog.response.generation_success:
+            response_preview.markdown(_response_html(prog.response), unsafe_allow_html=True)
 
-            if response is not None:
-                dataset.add_response(response)
-                if response.generation_success:
-                    generated += 1
-                    consecutive_failures = 0
-                else:
-                    failed += 1
-                    consecutive_failures += 1
-            else:
-                failed += 1
-                consecutive_failures += 1
-                if entry["error_type"]:
-                    st.warning(f"Response {entry['response_num']} failed: {entry['error_type']}")
-
-            if persona is not None:
-                persona_preview.markdown(_persona_html(persona), unsafe_allow_html=True)
-            if response is not None and response.generation_success:
-                response_preview.markdown(_response_html(response), unsafe_allow_html=True)
-
-            report_log.append(entry)
-
-            elapsed = time.time() - start_time
-            rate = completed / elapsed if elapsed > 0 else 0
-            remaining = (num_responses - completed) / rate if rate > 0 else 0
-            pct = completed / num_responses if num_responses else 1.0
-            progress_bar.progress(min(pct, 1.0), text=f"Response {completed} / {num_responses}  ({pct*100:.0f}%)")
-            gen_m.metric("Generated", generated)
-            fail_m.metric("Failed", failed)
-            time_m.metric("Elapsed", f"{elapsed:.0f}s")
-            rate_m.metric("ETA", f"{remaining:.0f}s" if rate > 0 else "...")
-
-            # Early stop if nothing is succeeding (e.g. bad key / dead model).
-            if consecutive_failures >= _MAX_CONSECUTIVE_FAIL and generated == 0:
-                for f in futures:
-                    f.cancel()
-                st.error(
-                    f"Stopped early: {_MAX_CONSECUTIVE_FAIL} consecutive failures with no success. "
-                    f"Check the Generation Report below for details."
-                )
-                break
+        elapsed = time.time() - start_time
+        newly = prog.completed - initial_completed
+        rate = newly / elapsed if elapsed > 0 else 0
+        remaining = (num_responses - prog.completed) / rate if rate > 0 else 0
+        pct = prog.completed / num_responses if num_responses else 1.0
+        progress_bar.progress(min(pct, 1.0), text=f"Response {prog.completed} / {num_responses}  ({pct*100:.0f}%)")
+        gen_m.metric("Generated", prog.generated)
+        fail_m.metric("Failed", prog.failed)
+        time_m.metric("Elapsed", f"{elapsed:.0f}s")
+        rate_m.metric("ETA", f"{remaining:.0f}s" if rate > 0 else "...")
 
     # Clean up stop button
     stop_holder.empty()
 
-    # Results arrive out of order under concurrency — restore submission order.
-    report_log.sort(key=lambda e: e["response_num"])
+    dataset = service.dataset
+    report_log = service.report_log
+    generated = sum(1 for r in dataset.responses if r.generation_success)
+    failed = len(dataset.responses) - generated
+    elapsed = time.time() - start_time
 
-    dataset.generation_completed = datetime.now(timezone.utc).isoformat()
-    dataset.total_failed = failed
+    if service.stopped_reason == "user":
+        st.warning(f"Generation stopped by user. {generated} responses completed and saved.")
+    elif service.stopped_reason == "failures":
+        st.error(
+            "Stopped early after repeated failures with no success. "
+            "Check the Generation Report below for details."
+        )
+
     progress_bar.progress(1.0, text="Generation complete!")
     gen_m.metric("Generated", generated)
     fail_m.metric("Failed", failed)
-    elapsed = time.time() - start_time
     time_m.metric("Total Time", f"{elapsed:.0f}s")
     rate_m.metric("Rate", f"{generated/elapsed:.1f}/s" if elapsed > 0 else "N/A")
 

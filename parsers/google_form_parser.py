@@ -10,6 +10,7 @@ import json
 import logging
 import re
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -43,24 +44,47 @@ class GoogleFormParser:
 
     VIEWFORM_SUFFIX = "/viewform"
     FORMRESPONSE_SUFFIX = "/formResponse"
+    # Only Google Forms hosts are ever valid input — this also prevents the
+    # parser from being pointed at arbitrary/internal URLs (SSRF).
+    ALLOWED_HOSTS = {"docs.google.com", "forms.gle"}
 
     def __init__(self, url: str):
         self.original_url = url
         self.url = self._normalize_url(url)
+        self._validate_host()
         self.raw_html: Optional[str] = None
         self.raw_data: Optional[list] = None
+        # Which strategy produced the schema: "structured" (FB_PUBLIC_LOAD_DATA_)
+        # or "html_fallback" (degraded DOM scraping).
+        self.parse_method: str = "structured"
 
     def _normalize_url(self, url: str) -> str:
         """Ensure the URL points to the viewform page."""
         url = url.strip()
         # Remove query parameters
         base = url.split("?")[0]
+        # Short links (forms.gle/...) are left intact — redirects resolve them.
+        host = urlparse(base).netloc.lower().split(":")[0]
+        if host.endswith("forms.gle"):
+            return base
         # Ensure it ends with /viewform
         if base.endswith(self.FORMRESPONSE_SUFFIX):
             base = base.replace(self.FORMRESPONSE_SUFFIX, self.VIEWFORM_SUFFIX)
         if not base.endswith(self.VIEWFORM_SUFFIX):
             base = base.rstrip("/") + self.VIEWFORM_SUFFIX
         return base
+
+    def _validate_host(self) -> None:
+        """Reject anything that isn't a Google Forms URL."""
+        host = urlparse(self.url).netloc.lower().split(":")[0]
+        if host.startswith("www."):
+            host = host[4:]
+        if host not in self.ALLOWED_HOSTS:
+            raise ValueError(
+                "Only public Google Forms URLs are supported "
+                "(docs.google.com or forms.gle). "
+                f"Received host: '{host or 'unknown'}'."
+            )
 
     def fetch(self) -> str:
         """Fetch the Google Form HTML."""
@@ -71,8 +95,37 @@ class GoogleFormParser:
                 "Chrome/120.0.0.0 Safari/537.36"
             )
         }
-        response = requests.get(self.url, headers=headers, timeout=30)
-        response.raise_for_status()
+        try:
+            response = requests.get(self.url, headers=headers, timeout=30)
+            response.raise_for_status()
+        except requests.exceptions.Timeout:
+            raise ValueError(
+                "The form request timed out after 30s. Google may be slow "
+                "right now — please try again in a moment."
+            )
+        except requests.exceptions.ConnectionError:
+            raise ValueError(
+                "Could not connect to Google Forms. Check your internet "
+                "connection and that the URL is correct."
+            )
+        except requests.exceptions.HTTPError as exc:
+            code = getattr(exc.response, "status_code", None)
+            if code == 404:
+                raise ValueError(
+                    "Form not found (404). The form may have been deleted, "
+                    "or the URL may be incorrect."
+                )
+            if code in (401, 403):
+                raise ValueError(
+                    "Access denied to this form. It must be publicly accessible "
+                    "(not restricted to an organization or specific accounts)."
+                )
+            raise ValueError(
+                f"Google Forms returned an error (HTTP {code}). "
+                "Please try again shortly."
+            )
+        except requests.exceptions.RequestException as exc:
+            raise ValueError(f"Failed to fetch the form: {exc}")
         self.raw_html = response.text
         return self.raw_html
 
@@ -247,6 +300,7 @@ class GoogleFormParser:
         try:
             schema = self._parse_from_fb_data()
             if schema.questions:
+                self.parse_method = "structured"
                 return schema
             logger.warning(
                 "FB_PUBLIC_LOAD_DATA_ parsed but yielded 0 questions; "
@@ -257,7 +311,10 @@ class GoogleFormParser:
                 "FB_PUBLIC_LOAD_DATA_ not found; falling back to HTML scraping."
             )
 
-        return self._parse_from_html()
+        self.parse_method = "html_fallback"
+        schema = self._parse_from_html()
+        schema.parse_method = "html_fallback"
+        return schema
 
     # ── Strategy 1: FB_PUBLIC_LOAD_DATA_ ──────────────────────────────────
 

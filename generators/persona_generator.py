@@ -5,6 +5,8 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+from pydantic import ValidationError
+
 from config import Settings
 from models.form_schema import FormSchema
 from models.persona import Persona
@@ -105,7 +107,7 @@ class PersonaGenerator:
                 # Duplicate on a non-final attempt — regenerate.
                 continue
 
-            except (json.JSONDecodeError, TypeError, KeyError) as e:
+            except (json.JSONDecodeError, TypeError, KeyError, ValidationError) as e:
                 if attempt >= self.settings.max_retries:
                     raise ValueError(
                         f"Failed to generate valid persona after {self.settings.max_retries + 1} attempts: {e}"

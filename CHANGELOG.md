@@ -6,6 +6,18 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Added — Insight, QA & reuse (feature phase 3)
+- Cross-tab significance testing (`analysis/stats.py`): chi-square, p-value, and
+  Cramér's V computed from a self-contained incomplete-gamma function (no scipy),
+  surfaced in a new Insights results tab.
+- Survey-design linting (`analysis/survey_lint.py`): flags leading/loaded wording,
+  double-barreled questions, missing opt-out options, and unlabeled scales on the
+  Preview page before generation.
+- Saveable/shareable study templates (`services/study.py`): export the full
+  configuration as JSON (never including API keys) and reload it to reproduce a run.
+- Sidebar/input widgets converted to the controlled pattern so loaded templates
+  restore cleanly without Streamlit state warnings.
+
 ### Added — Research use cases (feature phase 2)
 - Correlated latent-trait personas (`services/traits.py`): each persona carries
   stable hidden traits injected into form-filling so related questions correlate;

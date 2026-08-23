@@ -16,6 +16,12 @@ locally. Once deployed, add your URL here.
 - **Fidelity Scoring**: Upload real responses and get a 0–100 score of how closely the synthetic distribution matches, per question and overall (Total Variation Distance based).
 - **Bias & Quality Checks**: Automatic detection of straightlining, acquiescence/disagreement skew, low-variance answers, and duplicate responses — with suggested fixes.
 
+### Insight, QA & reuse
+
+- **Cross-Tab & Significance**: Pick any two categorical questions and get a cross-tabulation with a chi-square test, p-value, and Cramér's V effect size — turn generated data into insight in-app (no scipy needed).
+- **Survey-Design Review**: Before generating, the form is linted for leading/loaded wording, double-barreled questions, missing opt-out options, unlabeled scales, and more — SynthSurvey doubles as a survey-QA tool.
+- **Study Templates**: Save a full configuration (form, counts, provider/model, quotas, traits, waves, A/B variants) as a shareable JSON — **never including API keys** — and reload it to reproduce a study.
+
 ### Research use cases
 
 - **Correlated Latent-Trait Personas**: Each persona carries stable hidden traits (openness, skepticism, price sensitivity, tech savviness, …) that drive internally consistent, *correlated* answers across related questions — the way a real respondent's would. Trait scores are exported for analysis.

@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from analysis.fidelity import compute_fidelity, fidelity_verdict
 from analysis.quality import analyze_quality
+from analysis.stats import crosstab_test, effect_size_label
+from analysis.survey_lint import lint_survey
 from config import Settings, get_settings
 from exporters.csv_exporter import CSVExporter
 from exporters.json_exporter import JSONExporter
@@ -28,6 +30,7 @@ from providers import PROVIDER_IDS, PROVIDERS
 from services.generation import GenerationService, peek_checkpoint
 from services.quota import SUPPORTED_ATTRS, build_assignment_plan
 from services.stimulus import build_stimulus_plan
+from services.study import build_study_config, parse_study_config, study_to_bytes
 from utils.llm_client import LLMClient
 from utils.logging_config import setup_logging
 
@@ -131,6 +134,56 @@ def check_api_key() -> bool:
     return bool(st.session_state.get(spec.session_key) or os.environ.get(spec.env_var, ""))
 
 
+def apply_pending_study() -> None:
+    """Apply a loaded study config to widget/session state.
+
+    Runs once at the top of the script (before any widget is instantiated), so
+    setting widget-backed keys is safe. A study only sets config, never secrets.
+    """
+    cfg = st.session_state.pop("_pending_study", None)
+    if not cfg:
+        return
+
+    def setk(key, value):
+        if value is not None:
+            st.session_state[key] = value
+
+    # Sidebar/input widgets are controlled (keyed by these semantic names), so
+    # setting the semantic key here — before any widget instantiates — restores
+    # them without Streamlit's "default + session state" warning.
+    prov = cfg.get("llm_provider")
+    setk("form_url", cfg.get("form_url"))
+    setk("num_responses", cfg.get("num_responses"))
+    setk("persona_constraints", cfg.get("persona_constraints"))
+    if prov in PROVIDERS:
+        setk("llm_provider", prov)
+    setk("temperature", cfg.get("temperature"))
+    setk("api_call_delay", cfg.get("api_call_delay"))
+    setk("concurrency", cfg.get("concurrency"))
+    setk("max_retries", cfg.get("max_retries"))
+    for mk, mv in (cfg.get("models") or {}).items():
+        setk(mk, mv)
+    setk("enable_traits", cfg.get("enable_traits"))
+    setk("waves", cfg.get("waves"))
+
+    stimuli = cfg.get("stimuli") or []
+    st.session_state["n_variants"] = len(stimuli)
+    for i, s in enumerate(stimuli):
+        setk(f"stim_name_{i}", s.get("name"))
+        setk(f"stim_text_{i}", s.get("text"))
+    st.session_state["stimuli"] = stimuli
+
+    qt = cfg.get("quota_targets") or {}
+    st.session_state["quota_targets"] = qt
+    for attr in SUPPORTED_ATTRS:
+        st.session_state[f"quota_{attr}_enabled"] = attr in qt
+        for bucket, pct in (qt.get(attr) or {}).items():
+            st.session_state[f"quota_{attr}_{bucket}"] = pct
+
+
+apply_pending_study()
+
+
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -172,16 +225,15 @@ with st.sidebar:
 
     st.markdown('<div class="section-label">API Configuration</div>', unsafe_allow_html=True)
 
+    if st.session_state.get("llm_provider") not in PROVIDER_IDS:
+        st.session_state["llm_provider"] = PROVIDER_IDS[0]
     provider = st.selectbox(
         "LLM Provider",
         PROVIDER_IDS,
         format_func=lambda x: PROVIDERS[x].label,
-        index=PROVIDER_IDS.index(st.session_state.llm_provider)
-        if st.session_state.llm_provider in PROVIDER_IDS else 0,
-        key="sidebar_provider",
+        key="llm_provider",
         label_visibility="collapsed",
     )
-    st.session_state.llm_provider = provider
     spec = PROVIDERS[provider]
 
     key_attr = spec.session_key
@@ -196,49 +248,39 @@ with st.sidebar:
 
     model_options = list(spec.models)
     model_state_key = spec.model_attr
-    current_model = st.session_state[model_state_key]
-    model_idx = model_options.index(current_model) if current_model in model_options else 0
+    if st.session_state.get(model_state_key) not in model_options:
+        st.session_state[model_state_key] = spec.default_model
     selected_model = st.selectbox(
         f"{spec.label} Model",
         model_options,
-        index=model_idx,
-        key=f"sidebar_model_{provider}",
+        key=model_state_key,
     )
-    st.session_state[model_state_key] = selected_model
 
     temperature = st.slider(
         "Temperature", min_value=0.0, max_value=1.5, step=0.05,
-        value=st.session_state.temperature,
-        key="sidebar_temperature",
+        key="temperature",
         help="Higher = more creative & varied responses. Lower = more consistent.",
     )
-    st.session_state.temperature = temperature
 
     st.markdown('<div class="section-label">Advanced</div>', unsafe_allow_html=True)
 
     api_delay = st.slider(
         "API Call Delay (s)", min_value=0.0, max_value=3.0, step=0.1,
-        value=st.session_state.api_call_delay,
-        key="sidebar_delay",
+        key="api_call_delay",
         help="Delay between API calls to avoid rate limits.",
     )
-    st.session_state.api_call_delay = api_delay
 
     concurrency = st.slider(
         "Parallel Requests", min_value=1, max_value=8, step=1,
-        value=st.session_state.concurrency,
-        key="sidebar_concurrency",
+        key="concurrency",
         help="How many responses to generate at once. Higher = faster, but more likely to hit rate limits.",
     )
-    st.session_state.concurrency = concurrency
 
     max_retries = st.number_input(
         "Max Retries per Response", min_value=0, max_value=5, step=1,
-        value=st.session_state.max_retries,
-        key="sidebar_retries",
+        key="max_retries",
         help="Number of retry attempts if a response fails validation.",
     )
-    st.session_state.max_retries = max_retries
 
     # Test Connection button
     if st.button("Test Connection", use_container_width=True, key="sidebar_test_conn"):
@@ -296,6 +338,31 @@ def render_question_type_badge(qt: QuestionType) -> str:
     return f"`{_type_icon(qt)}` {qt.value.replace('_',' ').title()}"
 
 
+def render_survey_review(schema: FormSchema) -> None:
+    """Survey-design lint review shown before generation (F3.2)."""
+    result = lint_survey(schema)
+    warn = result["warn_count"]
+    with st.expander(f"Survey Design Review — {result['verdict']}", expanded=warn > 0):
+        if not result["findings"]:
+            st.success("No common survey-design issues detected.")
+            return
+        st.caption("Heuristic checks on question wording and options — advisory, not blocking.")
+        icons = {"warn": ("&#9888;", "#F59E0B"), "info": ("&#8505;", "#60A5FA")}
+        for f in result["findings"]:
+            icon, c = icons.get(f["severity"], ("&#8226;", "#9aa"))
+            st.markdown(
+                f'<div class="glass-card" style="margin-bottom:.5rem;">'
+                f'<div style="display:flex;align-items:center;gap:.5rem;">'
+                f'<span style="color:{c};">{icon}</span>'
+                f'<strong>{_esc(f["issue"])}</strong></div>'
+                f'<div style="font-size:.84rem;color:var(--text2);margin-top:3px;">'
+                f'Q: {_esc(f["question"][:120])}</div>'
+                f'<div style="font-size:.82rem;color:var(--text3);margin-top:3px;">'
+                f'{_esc(f["suggestion"])}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+
 _QUOTA_LABELS = {
     "gender": "Gender",
     "year": "Academic Year",
@@ -331,10 +398,11 @@ def render_quota_controls() -> None:
             cols = st.columns(len(buckets))
             bucket_pcts = {}
             for col, bucket in zip(cols, buckets):
+                bkey = f"quota_{attr}_{bucket}"
+                st.session_state.setdefault(bkey, default)
                 with col:
                     bucket_pcts[bucket] = st.number_input(
-                        bucket, min_value=0, max_value=100, value=default, step=5,
-                        key=f"quota_{attr}_{bucket}",
+                        bucket, min_value=0, max_value=100, step=5, key=bkey,
                     )
             total = sum(bucket_pcts.values())
             if total <= 0:
@@ -344,6 +412,30 @@ def render_quota_controls() -> None:
                 st.caption(f"{label}: sums to {total}% — will be normalized to 100%.")
             spec[attr] = bucket_pcts
     st.session_state.quota_targets = spec
+
+
+def render_study_templates() -> None:
+    """Save / load the full study configuration (phase 3). No API keys."""
+    with st.expander("Study Templates — save or load this configuration"):
+        st.caption("Export everything except API keys, so a study setup can be "
+                   "shared and re-run reproducibly.")
+        st.download_button(
+            "Download study config (.json)",
+            data=study_to_bytes(build_study_config(st.session_state)),
+            file_name="synthsurvey_study.json",
+            mime="application/json",
+            use_container_width=True,
+            key="study_download",
+        )
+        up = st.file_uploader("Load a study config", type=["json"], key="study_upload")
+        if up is not None and st.button(
+            "Apply loaded study", key="study_apply", use_container_width=True
+        ):
+            try:
+                st.session_state["_pending_study"] = parse_study_config(up.getvalue())
+                st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(f"Could not load study: {e}")
 
 
 def render_research_controls() -> None:
@@ -370,11 +462,11 @@ def render_research_controls() -> None:
         )
         stimuli = []
         for i in range(int(n_variants)):
+            nkey = f"stim_name_{i}"
+            st.session_state.setdefault(nkey, f"Variant {chr(65 + i)}")
             cols = st.columns([1, 3])
             with cols[0]:
-                name = st.text_input(
-                    "Name", value=f"Variant {chr(65 + i)}", key=f"stim_name_{i}",
-                )
+                name = st.text_input("Name", key=nkey)
             with cols[1]:
                 text = st.text_area(
                     "Description", key=f"stim_text_{i}", height=70,
@@ -399,6 +491,7 @@ def render_input_page():
     </div>
     """, unsafe_allow_html=True)
 
+    render_study_templates()
     st.divider()
 
     col_main, col_side = st.columns([5, 3], gap="large")
@@ -406,21 +499,21 @@ def render_input_page():
     with col_main:
         st.markdown("##### Google Form URL")
         form_url = st.text_input(
-            "url", value=st.session_state.form_url,
+            "url",
             placeholder="https://docs.google.com/forms/d/e/.../viewform",
-            key="input_form_url", label_visibility="collapsed",
+            key="form_url", label_visibility="collapsed",
         )
-        st.session_state.form_url = form_url
 
         sc1, sc2 = st.columns(2)
         with sc1:
             st.markdown("##### Responses")
-            num_responses = st.number_input(
-                "n", min_value=1, max_value=get_settings().max_response_count,
-                value=st.session_state.num_responses, step=10,
-                key="input_num_responses", label_visibility="collapsed",
+            _max_n = get_settings().max_response_count
+            if st.session_state.get("num_responses", 0) > _max_n:
+                st.session_state["num_responses"] = _max_n
+            st.number_input(
+                "n", min_value=1, max_value=_max_n, step=10,
+                key="num_responses", label_visibility="collapsed",
             )
-            st.session_state.num_responses = num_responses
         with sc2:
             st.markdown("##### Provider")
             _spec = PROVIDERS.get(st.session_state.llm_provider)
@@ -435,12 +528,11 @@ def render_input_page():
             )
 
         st.markdown("##### Persona Constraints")
-        constraints = st.text_area(
-            "c", value=st.session_state.persona_constraints,
+        st.text_area(
+            "c",
             placeholder="e.g., ASU undergrad students, mix of STEM and humanities, ages 18-25...",
-            height=85, key="input_constraints", label_visibility="collapsed",
+            height=85, key="persona_constraints", label_visibility="collapsed",
         )
-        st.session_state.persona_constraints = constraints
 
         render_quota_controls()
         render_research_controls()
@@ -647,6 +739,8 @@ def render_preview_page():
         cnt = sum(1 for q in schema.questions if q.question_type == qt)
         chips += f'<span class="chip">{_type_icon(qt)} {qt_val.replace("_"," ").title()} ({cnt})</span>'
     st.markdown(f'<div style="margin-bottom:.8rem;">{chips}</div>', unsafe_allow_html=True)
+
+    render_survey_review(schema)
 
     st.markdown("##### All Questions")
     for i, q in enumerate(schema.questions):
@@ -1112,7 +1206,7 @@ def render_results_page():
     has_reference = real_count > 0
     has_ab = "stimulus_variant" in df.columns and df["stimulus_variant"].dropna().nunique() > 1
     has_waves = "wave" in df.columns and df["wave"].dropna().nunique() > 1
-    tab_labels = ["Data Table", "Charts", "Diversity", "Quality"]
+    tab_labels = ["Data Table", "Charts", "Diversity", "Quality", "Insights"]
     if has_ab:
         tab_labels.append("A/B Test")
     if has_waves:
@@ -1151,6 +1245,9 @@ def render_results_page():
 
     with tabs["Quality"]:
         render_quality_checks(schema, df)
+
+    with tabs["Insights"]:
+        render_insights(schema, df)
 
     if has_ab:
         with tabs["A/B Test"]:
@@ -1282,6 +1379,69 @@ _PLOTLY_DARK = dict(
     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="Inter", color="#E8E6F0"),
 )
+
+
+_XTAB_TYPES = (
+    QuestionType.MULTIPLE_CHOICE, QuestionType.DROPDOWN,
+    QuestionType.LINEAR_SCALE, QuestionType.CHECKBOX,
+)
+
+
+def render_insights(schema: FormSchema, df: pd.DataFrame):
+    """Cross-tabulate two variables with a chi-square significance test (F3.1)."""
+    st.markdown("##### Cross-Tab &amp; Significance")
+    st.caption("Pick two categorical questions to test whether responses are related.")
+    synth = _synthetic_only(df)
+    cat_qs = [q.question_text for q in schema.questions
+              if q.question_type in _XTAB_TYPES and q.question_text in synth.columns]
+    row_options = list(cat_qs)
+    if "stimulus_variant" in synth.columns and synth["stimulus_variant"].dropna().nunique() > 1:
+        row_options = ["stimulus_variant", *row_options]
+
+    if not cat_qs or len(row_options) < 1:
+        st.info("Need at least one categorical question to cross-tabulate.")
+        return
+
+    c1, c2 = st.columns(2)
+    with c1:
+        a = st.selectbox("Row variable", row_options, key="xtab_a")
+    with c2:
+        b_options = [x for x in cat_qs if x != a] or cat_qs
+        b = st.selectbox("Column variable", b_options, key="xtab_b")
+    if a == b:
+        st.info("Pick two different variables.")
+        return
+
+    res = crosstab_test(synth, a, b)
+    if res["table"].empty:
+        st.info("Not enough data to cross-tabulate these two.")
+        return
+
+    st.dataframe(res["table"], use_container_width=True)
+
+    p, v = res["p_value"], res["cramers_v"]
+    if p is None:
+        st.caption("Table too small for a significance test.")
+    else:
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("p-value", f"{p:.4f}")
+        with m2:
+            st.metric("Cramér's V", f"{v:.2f}")
+        with m3:
+            st.metric("χ² (dof)", f"{res['chi2']:.1f} ({res['dof']})")
+        sig = "**significant**" if p < 0.05 else "not significant"
+        st.caption(
+            f"The association is {sig} at p < 0.05, with a {effect_size_label(v)} "
+            f"effect size (n = {res['n']}). Note: this is synthetic data, so "
+            "treat significance as illustrative of the generated patterns."
+        )
+
+    long = res["table"].reset_index().melt(id_vars=res["table"].index.name, var_name=b, value_name="count")
+    fig = px.bar(long, x=res["table"].index.name, y="count", color=b, barmode="group",
+                 title=f"{a[:40]} × {b[:40]}", template="plotly_dark")
+    fig.update_layout(**_PLOTLY_DARK)
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_ab_comparison(schema: FormSchema, df: pd.DataFrame):

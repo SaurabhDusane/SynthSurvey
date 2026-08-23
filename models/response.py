@@ -25,6 +25,16 @@ class GeneratedResponse(BaseModel):
     retry_count: int = Field(
         default=0, description="Number of retries needed for this response"
     )
+    wave: int = Field(
+        default=1, description="Longitudinal wave this response belongs to (1-based)"
+    )
+    stimulus_variant: Optional[str] = Field(
+        default=None, description="Name of the A/B stimulus variant shown, if any"
+    )
+    latent_traits: dict[str, float] = Field(
+        default_factory=dict,
+        description="Latent trait scores of the answering persona (if enabled)",
+    )
 
 
 class SurveyDataset(BaseModel):

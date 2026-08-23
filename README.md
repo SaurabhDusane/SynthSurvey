@@ -16,6 +16,12 @@ locally. Once deployed, add your URL here.
 - **Fidelity Scoring**: Upload real responses and get a 0–100 score of how closely the synthetic distribution matches, per question and overall (Total Variation Distance based).
 - **Bias & Quality Checks**: Automatic detection of straightlining, acquiescence/disagreement skew, low-variance answers, and duplicate responses — with suggested fixes.
 
+### Research use cases
+
+- **Correlated Latent-Trait Personas**: Each persona carries stable hidden traits (openness, skepticism, price sensitivity, tech savviness, …) that drive internally consistent, *correlated* answers across related questions — the way a real respondent's would. Trait scores are exported for analysis.
+- **A/B Stimulus (Conjoint) Testing**: Give personas a concept/ad/product to react to. With 2+ variants, respondents are split evenly and you get a side-by-side A/B comparison of how the synthetic audience responds.
+- **Longitudinal Wave Simulation**: Have the *same* personas answer across multiple simulated waves with realistic drift, and visualize how responses shift over time.
+
 ### Core
 
 - **Google Form Parsing**: Automatically extracts form structure (questions, types, options, validation rules) from any public Google Form URL

@@ -11,6 +11,7 @@ from config import Settings
 from models.form_schema import FormSchema
 from models.persona import Persona
 from services.quota import apply_assignment, assignment_directive
+from services.traits import traits_directive
 from utils.llm_client import LLMClient
 
 
@@ -58,6 +59,7 @@ class PersonaGenerator:
         form_schema: FormSchema,
         user_constraints: Optional[str] = None,
         assignment: Optional[dict] = None,
+        latent_traits: Optional[dict] = None,
     ) -> Persona:
         """Generate a single unique persona.
 
@@ -74,12 +76,13 @@ class PersonaGenerator:
         Raises:
             ValueError: If unable to generate a unique persona after retries.
         """
-        effective_constraints = user_constraints
-        directive = assignment_directive(assignment) if assignment else ""
-        if directive:
-            effective_constraints = (
-                f"{user_constraints}\n{directive}" if user_constraints else directive
-            )
+        directives = [d for d in (
+            assignment_directive(assignment) if assignment else "",
+            traits_directive(latent_traits) if latent_traits else "",
+        ) if d]
+        effective_constraints = "\n".join(
+            [c for c in ([user_constraints] if user_constraints else []) + directives]
+        ) or None
 
         with self._lock:
             system_prompt = self._build_prompt(form_schema, effective_constraints)
@@ -107,6 +110,8 @@ class PersonaGenerator:
                 # Force the persona to match its quota assignment exactly, so
                 # uniqueness and downstream stats reflect the honored quota.
                 apply_assignment(persona, assignment)
+                if latent_traits:
+                    persona.latent_traits = latent_traits
 
                 # Check uniqueness (guarded — this generator may be shared
                 # across concurrent workers).

@@ -6,6 +6,17 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Added — Research use cases (feature phase 2)
+- Correlated latent-trait personas (`services/traits.py`): each persona carries
+  stable hidden traits injected into form-filling so related questions correlate;
+  trait scores are exported and shown per response.
+- A/B stimulus / conjoint testing (`services/stimulus.py`): personas react to
+  named concept variants, split evenly, with a side-by-side comparison tab.
+- Longitudinal wave simulation: the same personas answer across multiple waves
+  with realistic drift; a Waves tab visualizes rating drift over time.
+- Response model carries `wave`, `stimulus_variant`, and `latent_traits`;
+  CSV/JSON exports include them.
+
 ### Added — Trustworthy synthetic data (feature phase 1)
 - Distribution / quota controls: deterministic assignment of gender, academic
   year, engagement level, and age band so target marginals are hit exactly

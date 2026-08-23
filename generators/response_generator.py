@@ -2,12 +2,13 @@
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from config import Settings
 from models.form_schema import FormSchema
 from models.persona import Persona
 from models.response import GeneratedResponse
+from services.traits import traits_directive
 from utils.llm_client import LLMClient
 from utils.validators import ResponseValidator, fix_response
 
@@ -42,6 +43,31 @@ class ResponseGenerator:
             persona_background_context=persona.background_context,
             form_title=form_schema.form_title,
         )
+
+    @staticmethod
+    def _augment_prompt(
+        persona: Persona,
+        stimulus: Optional[dict],
+        wave: int,
+    ) -> str:
+        """Extra prompt sections for latent traits, stimulus, and wave drift."""
+        sections = []
+        if persona.latent_traits:
+            sections.append(traits_directive(persona.latent_traits))
+        if stimulus and stimulus.get("text"):
+            name = stimulus.get("name", "the concept")
+            sections.append(
+                f'STIMULUS — you are evaluating the following material ("{name}"). '
+                f"Base your answers on it:\n{stimulus['text']}"
+            )
+        if wave and wave > 1:
+            sections.append(
+                f"This is wave {wave} of a longitudinal study; time has passed "
+                "since your earlier responses. Your views may have shifted "
+                "modestly and naturally — reflect small, realistic drift, not a "
+                "complete reversal."
+            )
+        return ("\n\n" + "\n\n".join(sections)) if sections else ""
 
     def _build_questions_prompt(self, form_schema: FormSchema) -> str:
         """Build the user prompt containing the form questions."""
@@ -105,26 +131,45 @@ class ResponseGenerator:
         self,
         persona: Persona,
         form_schema: FormSchema,
+        stimulus: Optional[dict] = None,
+        wave: int = 1,
     ) -> GeneratedResponse:
         """Generate a single survey response for a given persona.
 
         Args:
             persona: The persona to answer as.
             form_schema: The parsed form structure.
+            stimulus: Optional A/B stimulus dict ({"name", "text"}) the persona reacts to.
+            wave: Longitudinal wave number (1-based); >1 adds realistic drift.
 
         Returns:
             A GeneratedResponse object.
         """
+        variant = stimulus.get("name") if stimulus else None
+        traits = dict(persona.latent_traits) if persona.latent_traits else {}
         system_prompt = self._build_system_prompt(persona, form_schema)
+        system_prompt += self._augment_prompt(persona, stimulus, wave)
         user_prompt = self._build_questions_prompt(form_schema)
         validator = ResponseValidator(form_schema)
+
+        def _mk(answers: dict, success: bool, retries: int) -> GeneratedResponse:
+            return GeneratedResponse(
+                persona_id=persona.persona_id,
+                persona_summary=persona.summary(),
+                answers=answers,
+                generation_success=success,
+                retry_count=retries,
+                wave=wave,
+                stimulus_variant=variant,
+                latent_traits=traits,
+            )
 
         for attempt in range(self.settings.max_retries + 1):
             try:
                 answers = self.llm.generate_json(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
-                    temperature=getattr(self.settings, 'temperature', 0.8),
+                    temperature=getattr(self.settings, "temperature", 0.8),
                 )
 
                 # Handle case where LLM wraps answers in a key
@@ -133,39 +178,16 @@ class ResponseGenerator:
                 elif "responses" in answers and isinstance(answers["responses"], dict):
                     answers = answers["responses"]
 
-                # Validate
                 is_valid, errors = validator.validate(answers)
-
                 if not is_valid:
-                    # Try to fix
                     answers = self._attempt_fix(form_schema, answers, errors)
                     is_valid, errors = validator.validate(answers)
 
                 if is_valid or attempt == self.settings.max_retries:
-                    return GeneratedResponse(
-                        persona_id=persona.persona_id,
-                        persona_summary=persona.summary(),
-                        answers=answers,
-                        generation_success=is_valid,
-                        retry_count=attempt,
-                    )
+                    return _mk(answers, is_valid, attempt)
 
             except (json.JSONDecodeError, TypeError):
                 if attempt >= self.settings.max_retries:
-                    # Return a failed response
-                    return GeneratedResponse(
-                        persona_id=persona.persona_id,
-                        persona_summary=persona.summary(),
-                        answers={},
-                        generation_success=False,
-                        retry_count=attempt + 1,
-                    )
+                    return _mk({}, False, attempt + 1)
 
-        # Should not reach here, but just in case
-        return GeneratedResponse(
-            persona_id=persona.persona_id,
-            persona_summary=persona.summary(),
-            answers={},
-            generation_success=False,
-            retry_count=self.settings.max_retries + 1,
-        )
+        return _mk({}, False, self.settings.max_retries + 1)

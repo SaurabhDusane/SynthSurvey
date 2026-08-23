@@ -30,8 +30,12 @@ class CSVExporter:
         # Build question ID to text mapping
         q_map = {q.question_id: q.question_text for q in form_schema.questions}
 
+        responses = dataset.responses
+        has_waves = any(getattr(r, "wave", 1) != 1 for r in responses)
+        has_stimulus = any(getattr(r, "stimulus_variant", None) for r in responses)
+
         rows = []
-        for resp in dataset.responses:
+        for resp in responses:
             row = {}
             for qid, answer in resp.answers.items():
                 col_name = q_map.get(qid, qid)
@@ -53,6 +57,13 @@ class CSVExporter:
             row["persona_id"] = resp.persona_id
             row["persona_summary"] = resp.persona_summary
             row["generation_timestamp"] = resp.generation_timestamp
+            # Phase 2 research metadata (columns present only when in use).
+            if has_waves:
+                row["wave"] = getattr(resp, "wave", 1)
+            if has_stimulus:
+                row["stimulus_variant"] = getattr(resp, "stimulus_variant", None)
+            for tname, tval in getattr(resp, "latent_traits", {}).items():
+                row[f"trait_{tname}"] = tval
 
             rows.append(row)
 

@@ -37,6 +37,10 @@ class Persona(BaseModel):
     background_context: str = Field(
         description="1-2 sentence backstory that informs their perspective"
     )
+    latent_traits: dict[str, float] = Field(
+        default_factory=dict,
+        description="Hidden 0-1 latent trait scores that drive correlated answers",
+    )
 
     def summary(self) -> str:
         """Return a short text summary of the persona."""

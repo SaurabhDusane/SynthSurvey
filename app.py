@@ -27,6 +27,7 @@ from parsers.google_form_parser import GoogleFormParser
 from providers import PROVIDER_IDS, PROVIDERS
 from services.generation import GenerationService, peek_checkpoint
 from services.quota import SUPPORTED_ATTRS, build_assignment_plan
+from services.stimulus import build_stimulus_plan
 from utils.llm_client import LLMClient
 from utils.logging_config import setup_logging
 
@@ -86,6 +87,9 @@ def init_session_state():
         "generation_report": [],
         "stop_generation": False,
         "quota_targets": {},
+        "enable_traits": False,
+        "waves": 1,
+        "stimuli": [],
     }
     # Per-provider API key + model defaults, from the central registry.
     for spec in PROVIDERS.values():
@@ -342,6 +346,45 @@ def render_quota_controls() -> None:
     st.session_state.quota_targets = spec
 
 
+def render_research_controls() -> None:
+    """Latent traits, longitudinal waves, and A/B stimulus controls (phase 2)."""
+    with st.expander("Research Controls (latent traits · waves · A/B testing)"):
+        st.checkbox(
+            "Correlated latent traits",
+            key="enable_traits",
+            help="Give each persona stable hidden traits so related questions "
+                 "correlate the way a real person's answers would.",
+        )
+
+        st.number_input(
+            "Longitudinal waves", min_value=1, max_value=5, step=1, key="waves",
+            help="Each persona answers once per wave with realistic drift. "
+                 "Total responses = personas × waves.",
+        )
+
+        st.markdown("**A/B stimulus variants** (optional)")
+        st.caption("Give personas a concept/ad/product to react to. With 2+ "
+                   "variants, personas are split evenly so you can compare A vs. B.")
+        n_variants = st.number_input(
+            "Number of variants", min_value=0, max_value=4, step=1, key="n_variants",
+        )
+        stimuli = []
+        for i in range(int(n_variants)):
+            cols = st.columns([1, 3])
+            with cols[0]:
+                name = st.text_input(
+                    "Name", value=f"Variant {chr(65 + i)}", key=f"stim_name_{i}",
+                )
+            with cols[1]:
+                text = st.text_area(
+                    "Description", key=f"stim_text_{i}", height=70,
+                    placeholder="Describe the concept this group evaluates…",
+                )
+            if text and text.strip():
+                stimuli.append({"name": name, "text": text.strip()})
+        st.session_state.stimuli = stimuli
+
+
 # ─── Page: Input ──────────────────────────────────────────────────────────────
 
 
@@ -400,6 +443,7 @@ def render_input_page():
         st.session_state.persona_constraints = constraints
 
         render_quota_controls()
+        render_research_controls()
 
         st.markdown("##### Existing Data (Optional)")
         uploaded_file = st.file_uploader(
@@ -749,10 +793,16 @@ def render_generation_page():
     provider = settings.llm_provider
     model_name = getattr(settings, f"{provider}_model", "unknown")
     resume = bool(st.session_state.get("resume_generation", False))
+    enable_traits = bool(st.session_state.get("enable_traits"))
+    waves = int(st.session_state.get("waves", 1) or 1)
+    resume = resume and waves == 1  # multi-wave runs are always fresh
 
-    # Deterministic quota plan (empty when no quotas are configured).
+    # Deterministic quota + stimulus plans (empty when unconfigured).
     quota_plan = build_assignment_plan(
         st.session_state.get("quota_targets") or None, num_responses
+    )
+    stimulus_plan = build_stimulus_plan(
+        st.session_state.get("stimuli") or None, num_responses
     )
 
     try:
@@ -761,6 +811,9 @@ def render_generation_page():
             constraints=st.session_state.persona_constraints or None,
             resume=resume,
             quota_plan=quota_plan,
+            stimulus_plan=stimulus_plan,
+            waves=waves,
+            enable_traits=enable_traits,
         )
     except ValueError as e:
         st.error(str(e))
@@ -849,11 +902,12 @@ def render_generation_page():
             response_preview.markdown(_response_html(prog.response), unsafe_allow_html=True)
 
         elapsed = time.time() - start_time
+        total = prog.total or num_responses
         newly = prog.completed - initial_completed
         rate = newly / elapsed if elapsed > 0 else 0
-        remaining = (num_responses - prog.completed) / rate if rate > 0 else 0
-        pct = prog.completed / num_responses if num_responses else 1.0
-        progress_bar.progress(min(pct, 1.0), text=f"Response {prog.completed} / {num_responses}  ({pct*100:.0f}%)")
+        remaining = (total - prog.completed) / rate if rate > 0 else 0
+        pct = prog.completed / total if total else 1.0
+        progress_bar.progress(min(pct, 1.0), text=f"Response {prog.completed} / {total}  ({pct*100:.0f}%)")
         gen_m.metric("Generated", prog.generated)
         fail_m.metric("Failed", prog.failed)
         time_m.metric("Elapsed", f"{elapsed:.0f}s")
@@ -1056,7 +1110,13 @@ def render_results_page():
     st.divider()
 
     has_reference = real_count > 0
+    has_ab = "stimulus_variant" in df.columns and df["stimulus_variant"].dropna().nunique() > 1
+    has_waves = "wave" in df.columns and df["wave"].dropna().nunique() > 1
     tab_labels = ["Data Table", "Charts", "Diversity", "Quality"]
+    if has_ab:
+        tab_labels.append("A/B Test")
+    if has_waves:
+        tab_labels.append("Waves")
     if has_reference:
         tab_labels.append("Fidelity")
     tab_labels += ["Personas", "Export"]
@@ -1091,6 +1151,14 @@ def render_results_page():
 
     with tabs["Quality"]:
         render_quality_checks(schema, df)
+
+    if has_ab:
+        with tabs["A/B Test"]:
+            render_ab_comparison(schema, df)
+
+    if has_waves:
+        with tabs["Waves"]:
+            render_waves(schema, df)
 
     if has_reference:
         with tabs["Fidelity"]:
@@ -1208,6 +1276,82 @@ def render_fidelity(schema: FormSchema, df: pd.DataFrame):
             )
     for note in result["notes"]:
         st.caption(note)
+
+
+_PLOTLY_DARK = dict(
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(family="Inter", color="#E8E6F0"),
+)
+
+
+def render_ab_comparison(schema: FormSchema, df: pd.DataFrame):
+    """Compare answers across A/B stimulus variants (F2.2)."""
+    st.markdown("##### A/B Stimulus Comparison")
+    d = df[df["stimulus_variant"].notna()] if "stimulus_variant" in df.columns else df.iloc[0:0]
+    if d.empty or d["stimulus_variant"].nunique() < 2:
+        st.info("Need at least two stimulus variants to compare.")
+        return
+
+    counts = d["stimulus_variant"].value_counts()
+    st.caption("Respondents per variant — " + ", ".join(f"{k}: {v}" for k, v in counts.items()))
+
+    scale_cols = [q.question_text for q in schema.questions
+                  if q.question_type == QuestionType.LINEAR_SCALE and q.question_text in d.columns]
+    if scale_cols:
+        rows = []
+        for c in scale_cols:
+            means = d.groupby("stimulus_variant")[c].apply(lambda s: pd.to_numeric(s, errors="coerce").mean())
+            for var, m in means.items():
+                if pd.notna(m):
+                    rows.append({"Question": c[:40], "Variant": var, "Mean rating": round(float(m), 2)})
+        if rows:
+            fig = px.bar(pd.DataFrame(rows), x="Question", y="Mean rating", color="Variant",
+                         barmode="group", title="Mean scale rating by variant", template="plotly_dark")
+            fig.update_layout(**_PLOTLY_DARK)
+            st.plotly_chart(fig, use_container_width=True)
+
+    choice_qs = [q for q in schema.questions
+                 if q.question_type in (QuestionType.MULTIPLE_CHOICE, QuestionType.DROPDOWN)
+                 and q.question_text in d.columns]
+    for q in choice_qs[:5]:
+        c = q.question_text
+        ct = (d.groupby("stimulus_variant")[c].value_counts(normalize=True)
+              .mul(100).round(1).rename("percent").reset_index())
+        fig = px.bar(ct, x=c, y="percent", color="stimulus_variant", barmode="group",
+                     title=f"{c[:50]} — share by variant", template="plotly_dark")
+        fig.update_layout(**_PLOTLY_DARK, yaxis_title="%", legend_title="Variant")
+        st.plotly_chart(fig, use_container_width=True)
+
+
+def render_waves(schema: FormSchema, df: pd.DataFrame):
+    """Show how answers drift across longitudinal waves (F2.3)."""
+    st.markdown("##### Longitudinal Waves")
+    d = df[df["wave"].notna()] if "wave" in df.columns else df.iloc[0:0]
+    if d.empty or d["wave"].nunique() < 2:
+        st.info("Need at least two waves to show drift.")
+        return
+
+    counts = d["wave"].value_counts().sort_index()
+    st.caption("Responses per wave — " + ", ".join(f"wave {int(k)}: {v}" for k, v in counts.items()))
+
+    scale_cols = [q.question_text for q in schema.questions
+                  if q.question_type == QuestionType.LINEAR_SCALE and q.question_text in d.columns]
+    if not scale_cols:
+        st.info("Add linear-scale questions to visualize drift across waves.")
+        return
+
+    rows = []
+    for c in scale_cols:
+        means = d.groupby("wave")[c].apply(lambda s: pd.to_numeric(s, errors="coerce").mean())
+        for w, m in means.items():
+            if pd.notna(m):
+                rows.append({"Wave": int(w), "Question": c[:40], "Mean rating": round(float(m), 2)})
+    if rows:
+        fig = px.line(pd.DataFrame(rows), x="Wave", y="Mean rating", color="Question",
+                      markers=True, title="Mean scale rating drift across waves", template="plotly_dark")
+        fig.update_layout(**_PLOTLY_DARK)
+        fig.update_xaxes(dtick=1)
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: SurveyDataset):

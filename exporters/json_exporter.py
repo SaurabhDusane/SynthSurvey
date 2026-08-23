@@ -31,16 +31,21 @@ class JSONExporter:
                 col_name = q_map.get(qid, qid)
                 readable_answers[col_name] = answer
 
-            responses.append(
-                {
-                    "persona_id": resp.persona_id,
-                    "persona_summary": resp.persona_summary,
-                    "is_synthetic": resp.is_synthetic,
-                    "generation_timestamp": resp.generation_timestamp,
-                    "generation_success": resp.generation_success,
-                    "answers": readable_answers,
-                }
-            )
+            entry = {
+                "persona_id": resp.persona_id,
+                "persona_summary": resp.persona_summary,
+                "is_synthetic": resp.is_synthetic,
+                "generation_timestamp": resp.generation_timestamp,
+                "generation_success": resp.generation_success,
+                "answers": readable_answers,
+            }
+            if getattr(resp, "wave", 1) != 1:
+                entry["wave"] = resp.wave
+            if getattr(resp, "stimulus_variant", None):
+                entry["stimulus_variant"] = resp.stimulus_variant
+            if getattr(resp, "latent_traits", None):
+                entry["latent_traits"] = resp.latent_traits
+            responses.append(entry)
 
         return {
             "metadata": {

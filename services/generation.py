@@ -87,10 +87,12 @@ class GenerationService:
         llm_client: Optional[LLMClient] = None,
         checkpoint_dir: Optional[Path] = None,
         resume: bool = False,
+        quota_plan: Optional[list[dict]] = None,
     ):
         self.schema = schema
         self.settings = settings
         self.constraints = constraints or None
+        self.quota_plan = quota_plan or []
         self.provider = settings.llm_provider
         self.model_name = getattr(settings, f"{self.provider}_model", "unknown")
 
@@ -166,7 +168,10 @@ class GenerationService:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            persona = self.persona_gen.generate_one(self.schema, self.constraints)
+            assignment = self.quota_plan[i] if i < len(self.quota_plan) else None
+            persona = self.persona_gen.generate_one(
+                self.schema, self.constraints, assignment=assignment
+            )
             entry["persona_name"] = persona.name
             response = self.response_gen.generate_one(persona, self.schema)
             if not response.generation_success:
@@ -198,11 +203,12 @@ class GenerationService:
         completed = len(self.dataset.responses)
         generated = sum(1 for r in self.dataset.responses if r.generation_success)
         failed = completed - generated
-        remaining = max(0, count - completed)
         consecutive_failures = 0
 
+        # Submit *global* indices [completed, count) so response numbers stay
+        # stable across resume and align with the quota plan.
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            futures = {executor.submit(self._work, i): i for i in range(remaining)}
+            futures = {executor.submit(self._work, i): i for i in range(completed, count)}
             for future in as_completed(futures):
                 if should_stop is not None and should_stop():
                     for f in futures:

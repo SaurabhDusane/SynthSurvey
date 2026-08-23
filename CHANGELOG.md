@@ -6,6 +6,15 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Added — Trustworthy synthetic data (feature phase 1)
+- Distribution / quota controls: deterministic assignment of gender, academic
+  year, engagement level, and age band so target marginals are hit exactly
+  (`services/quota.py`), reconciled onto each persona regardless of LLM output.
+- Fidelity scoring against uploaded real data (`analysis/fidelity.py`) with a
+  0–100 overall score and per-question breakdown, shown in a new Fidelity tab.
+- Bias & quality checks (`analysis/quality.py`): straightlining, response skew,
+  low-variance answers, and duplicate detection, shown in a new Quality tab.
+
 ### Added
 - Concurrent response generation with a configurable "Parallel Requests"
   control and a shared, thread-safe rate limiter.

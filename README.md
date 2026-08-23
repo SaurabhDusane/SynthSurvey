@@ -10,6 +10,14 @@ locally. Once deployed, add your URL here.
 
 ## Features
 
+### Trustworthy synthetic data
+
+- **Distribution / Quota Controls**: Enforce an exact demographic mix (gender, academic year, engagement level, age band). Targets are assigned deterministically and reconciled onto each persona — the requested marginals are hit exactly, not just requested of the model.
+- **Fidelity Scoring**: Upload real responses and get a 0–100 score of how closely the synthetic distribution matches, per question and overall (Total Variation Distance based).
+- **Bias & Quality Checks**: Automatic detection of straightlining, acquiescence/disagreement skew, low-variance answers, and duplicate responses — with suggested fixes.
+
+### Core
+
 - **Google Form Parsing**: Automatically extracts form structure (questions, types, options, validation rules) from any public Google Form URL
 - **Unique Persona Generation**: Each synthetic response comes from a distinct, LLM-generated persona with realistic demographics, personality traits, and engagement levels
 - **In-Character Form Filling**: The LLM fills out each form as the generated persona, producing realistic and diverse responses

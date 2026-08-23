@@ -15,6 +15,8 @@ import streamlit as st
 # Ensure project root is on the path
 sys.path.insert(0, str(Path(__file__).parent))
 
+from analysis.fidelity import compute_fidelity, fidelity_verdict
+from analysis.quality import analyze_quality
 from config import Settings, get_settings
 from exporters.csv_exporter import CSVExporter
 from exporters.json_exporter import JSONExporter
@@ -24,6 +26,7 @@ from models.response import GeneratedResponse, SurveyDataset
 from parsers.google_form_parser import GoogleFormParser
 from providers import PROVIDER_IDS, PROVIDERS
 from services.generation import GenerationService, peek_checkpoint
+from services.quota import SUPPORTED_ATTRS, build_assignment_plan
 from utils.llm_client import LLMClient
 from utils.logging_config import setup_logging
 
@@ -82,6 +85,7 @@ def init_session_state():
         "max_retries": 2,
         "generation_report": [],
         "stop_generation": False,
+        "quota_targets": {},
     }
     # Per-provider API key + model defaults, from the central registry.
     for spec in PROVIDERS.values():
@@ -288,6 +292,56 @@ def render_question_type_badge(qt: QuestionType) -> str:
     return f"`{_type_icon(qt)}` {qt.value.replace('_',' ').title()}"
 
 
+_QUOTA_LABELS = {
+    "gender": "Gender",
+    "year": "Academic Year",
+    "engagement_level": "Engagement Level",
+    "age_range": "Age Range",
+}
+
+
+def render_quota_controls() -> None:
+    """Render optional distribution/quota controls; store the spec in state.
+
+    Each enabled attribute's target proportions are honored *exactly* at
+    generation time (deterministic pre-assignment), not merely requested of
+    the model.
+    """
+    spec: dict = {}
+    active = sum(
+        1 for attr in SUPPORTED_ATTRS
+        if st.session_state.get(f"quota_{attr}_enabled")
+    )
+    title = f"Distribution Controls — {active} active" if active else "Distribution Controls (optional)"
+    with st.expander(title):
+        st.caption(
+            "Enforce an exact demographic mix. Enabled attributes are matched "
+            "exactly across your responses — the tool assigns them, it doesn't "
+            "just ask the model to comply."
+        )
+        for attr, buckets in SUPPORTED_ATTRS.items():
+            label = _QUOTA_LABELS.get(attr, attr)
+            if not st.checkbox(f"Constrain {label}", key=f"quota_{attr}_enabled"):
+                continue
+            default = round(100 / len(buckets))
+            cols = st.columns(len(buckets))
+            bucket_pcts = {}
+            for col, bucket in zip(cols, buckets):
+                with col:
+                    bucket_pcts[bucket] = st.number_input(
+                        bucket, min_value=0, max_value=100, value=default, step=5,
+                        key=f"quota_{attr}_{bucket}",
+                    )
+            total = sum(bucket_pcts.values())
+            if total <= 0:
+                st.warning(f"{label}: set at least one bucket above 0%.")
+                continue
+            if total != 100:
+                st.caption(f"{label}: sums to {total}% — will be normalized to 100%.")
+            spec[attr] = bucket_pcts
+    st.session_state.quota_targets = spec
+
+
 # ─── Page: Input ──────────────────────────────────────────────────────────────
 
 
@@ -344,6 +398,8 @@ def render_input_page():
             height=85, key="input_constraints", label_visibility="collapsed",
         )
         st.session_state.persona_constraints = constraints
+
+        render_quota_controls()
 
         st.markdown("##### Existing Data (Optional)")
         uploaded_file = st.file_uploader(
@@ -694,11 +750,17 @@ def render_generation_page():
     model_name = getattr(settings, f"{provider}_model", "unknown")
     resume = bool(st.session_state.get("resume_generation", False))
 
+    # Deterministic quota plan (empty when no quotas are configured).
+    quota_plan = build_assignment_plan(
+        st.session_state.get("quota_targets") or None, num_responses
+    )
+
     try:
         service = GenerationService(
             schema, settings,
             constraints=st.session_state.persona_constraints or None,
             resume=resume,
+            quota_plan=quota_plan,
         )
     except ValueError as e:
         st.error(str(e))
@@ -993,9 +1055,14 @@ def render_results_page():
 
     st.divider()
 
-    tab_data, tab_charts, tab_diversity, tab_personas, tab_export = st.tabs(["Data Table", "Charts", "Diversity", "Personas", "Export"])
+    has_reference = real_count > 0
+    tab_labels = ["Data Table", "Charts", "Diversity", "Quality"]
+    if has_reference:
+        tab_labels.append("Fidelity")
+    tab_labels += ["Personas", "Export"]
+    tabs = dict(zip(tab_labels, st.tabs(tab_labels)))
 
-    with tab_data:
+    with tabs["Data Table"]:
         # Quality score
         if "is_synthetic" in df.columns:
             synth_df = df[df["is_synthetic"].astype(bool)]
@@ -1016,19 +1083,131 @@ def render_results_page():
             )
         st.dataframe(df, use_container_width=True, height=500)
 
-    with tab_charts:
+    with tabs["Charts"]:
         render_charts(schema, df)
 
-    with tab_diversity:
+    with tabs["Diversity"]:
         render_diversity_metrics(schema, df, dataset)
 
-    with tab_personas:
+    with tabs["Quality"]:
+        render_quality_checks(schema, df)
+
+    if has_reference:
+        with tabs["Fidelity"]:
+            render_fidelity(schema, df)
+
+    with tabs["Personas"]:
         render_persona_gallery(dataset)
 
-    with tab_export:
+    with tabs["Export"]:
         render_export(schema, dataset, df)
 
     _render_footer()
+
+
+def _synthetic_only(df: pd.DataFrame) -> pd.DataFrame:
+    """Return just the synthetic rows (or the whole frame if unmarked)."""
+    if "is_synthetic" in df.columns:
+        return df[df["is_synthetic"].astype(bool)]
+    return df
+
+
+def render_quality_checks(schema: FormSchema, df: pd.DataFrame):
+    """Render bias / straightlining / duplicate quality checks (F1.3)."""
+    st.markdown("##### Quality &amp; Bias Checks")
+    st.caption("Run on synthetic responses only — the tells of low-quality survey data.")
+    synth = _synthetic_only(df)
+    if synth.empty:
+        st.info("No synthetic responses to analyze.")
+        return
+
+    result = analyze_quality(synth, schema)
+    warn = result["warn_count"]
+    color = "#22c55e" if warn == 0 else "#F59E0B"
+    st.markdown(
+        f'<div style="margin:.2rem 0 1rem;font-weight:700;color:{color};">'
+        f'{_esc(result["verdict"])}</div>',
+        unsafe_allow_html=True,
+    )
+
+    icons = {"pass": ("&#10003;", "#22c55e"), "warn": ("&#9888;", "#F59E0B"),
+             "info": ("&#8505;", "#60A5FA")}
+    for f in result["findings"]:
+        icon, c = icons.get(f["severity"], ("&#8226;", "#9aa"))
+        suggestion = (
+            f'<div style="font-size:.82rem;color:var(--text3);margin-top:4px;">'
+            f'Fix: {_esc(f["suggestion"])}</div>' if f.get("suggestion") else ""
+        )
+        st.markdown(
+            f'<div class="glass-card" style="margin-bottom:.6rem;">'
+            f'<div style="display:flex;align-items:center;gap:.6rem;">'
+            f'<span style="color:{c};font-size:1.1rem;">{icon}</span>'
+            f'<strong>{_esc(f["check"])}</strong>'
+            f'<span style="margin-left:auto;font-family:monospace;color:{c};">{_esc(str(f["metric"]))}</span>'
+            f'</div>'
+            f'<div style="font-size:.88rem;color:var(--text2);margin-top:4px;">{_esc(f["detail"])}</div>'
+            f'{suggestion}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_fidelity(schema: FormSchema, df: pd.DataFrame):
+    """Compare synthetic vs. uploaded real data distributions (F1.2)."""
+    st.markdown("##### Fidelity vs. Real Data")
+    if "is_synthetic" not in df.columns:
+        st.info("Upload real responses on the Input page to compare distributions.")
+        return
+    synth = df[df["is_synthetic"].astype(bool)]
+    ref = df[~df["is_synthetic"].astype(bool)]
+    if synth.empty or ref.empty:
+        st.info("Need both synthetic and real responses to score fidelity.")
+        return
+
+    result = compute_fidelity(synth, ref, schema)
+    score = result["overall_score"]
+    verdict = fidelity_verdict(score)
+
+    if score is None:
+        for note in result["notes"]:
+            st.warning(note)
+        return
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        st.metric("Overall Fidelity", f"{score:.0f}/100")
+        st.caption(verdict)
+    with c2:
+        st.caption(
+            f"Scored {result['scored']} question(s) by comparing answer "
+            "distributions (100 = identical to real data). Lower-scoring "
+            "questions are where synthetic data diverges most."
+        )
+
+    pq = pd.DataFrame(result["per_question"])
+    if not pq.empty:
+        fig = px.bar(
+            pq, x="similarity", y="question", orientation="h",
+            range_x=[0, 100], title="Distribution match by question (higher = closer)",
+            color="similarity", color_continuous_scale=["#EF4444", "#F59E0B", "#14B8A6"],
+            template="plotly_dark",
+        )
+        fig.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Inter", color="#E8E6F0"),
+            height=max(300, len(pq) * 38), yaxis_title="", xaxis_title="Similarity",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        with st.expander("Per-question detail"):
+            st.dataframe(
+                pq.rename(columns={
+                    "question": "Question", "type": "Type",
+                    "similarity": "Similarity %", "tvd": "Distance",
+                    "n_ref": "Real n", "n_syn": "Synthetic n",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+    for note in result["notes"]:
+        st.caption(note)
 
 
 def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: SurveyDataset):

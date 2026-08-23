@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from config import Settings
 from models.form_schema import FormSchema
 from models.persona import Persona
+from services.quota import apply_assignment, assignment_directive
 from utils.llm_client import LLMClient
 
 
@@ -56,12 +57,16 @@ class PersonaGenerator:
         self,
         form_schema: FormSchema,
         user_constraints: Optional[str] = None,
+        assignment: Optional[dict] = None,
     ) -> Persona:
         """Generate a single unique persona.
 
         Args:
             form_schema: The parsed form structure.
             user_constraints: Optional constraints for persona generation.
+            assignment: Optional quota assignment forcing specific attributes
+                (gender/year/engagement_level/age). When given, the persona is
+                reconciled to it so the quota is honored exactly.
 
         Returns:
             A unique Persona object.
@@ -69,8 +74,15 @@ class PersonaGenerator:
         Raises:
             ValueError: If unable to generate a unique persona after retries.
         """
+        effective_constraints = user_constraints
+        directive = assignment_directive(assignment) if assignment else ""
+        if directive:
+            effective_constraints = (
+                f"{user_constraints}\n{directive}" if user_constraints else directive
+            )
+
         with self._lock:
-            system_prompt = self._build_prompt(form_schema, user_constraints)
+            system_prompt = self._build_prompt(form_schema, effective_constraints)
         user_prompt = (
             "Generate one unique persona as a JSON object. "
             "Remember: it must be different from all previously generated personas."
@@ -91,6 +103,10 @@ class PersonaGenerator:
                     data = data["persona"]
 
                 persona = Persona(**data)
+
+                # Force the persona to match its quota assignment exactly, so
+                # uniqueness and downstream stats reflect the honored quota.
+                apply_assignment(persona, assignment)
 
                 # Check uniqueness (guarded — this generator may be shared
                 # across concurrent workers).

@@ -16,6 +16,13 @@ locally. Once deployed, add your URL here.
 - **Fidelity Scoring**: Upload real responses and get a 0–100 score of how closely the synthetic distribution matches, per question and overall (Total Variation Distance based).
 - **Bias & Quality Checks**: Automatic detection of straightlining, acquiescence/disagreement skew, low-variance answers, and duplicate responses — with suggested fixes.
 
+### Trust, safety & provenance
+
+- **Provenance Manifest**: Every dataset carries an auditable manifest — tool version, model, seed, full config, and a content hash — embedded in the JSON export and downloadable on its own, so results can be traced and never mistaken for real data.
+- **Seeded Reproducibility**: A configurable random seed makes persona/variant assignment and trait sampling reproducible (set temperature to 0 for the most deterministic answers).
+- **"Why This Answer" Trace**: Expand any persona to see the drivers behind its responses — engagement, attitude, background, top latent traits, and the stimulus/wave it saw.
+- **Clear Synthetic Disclosure**: Prominent synthetic-data banners in the app and exports; every row stays marked `is_synthetic`.
+
 ### Insight, QA & reuse
 
 - **Cross-Tab & Significance**: Pick any two categorical questions and get a cross-tabulation with a chi-square test, p-value, and Cramér's V effect size — turn generated data into insight in-app (no scipy needed).

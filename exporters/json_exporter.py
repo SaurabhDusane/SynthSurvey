@@ -1,7 +1,7 @@
 """JSON export for survey datasets."""
 
 import json
-from typing import Any
+from typing import Any, Optional
 
 from models.form_schema import FormSchema
 from models.response import SurveyDataset
@@ -11,12 +11,17 @@ class JSONExporter:
     """Export survey dataset to JSON format."""
 
     @staticmethod
-    def to_dict(dataset: SurveyDataset, form_schema: FormSchema) -> dict[str, Any]:
+    def to_dict(
+        dataset: SurveyDataset,
+        form_schema: FormSchema,
+        provenance: Optional[dict] = None,
+    ) -> dict[str, Any]:
         """Convert a SurveyDataset to a JSON-serializable dictionary.
 
         Args:
             dataset: The generated survey dataset.
             form_schema: The form schema for metadata.
+            provenance: Optional provenance manifest embedded under metadata.
 
         Returns:
             A dictionary ready for JSON serialization.
@@ -47,15 +52,19 @@ class JSONExporter:
                 entry["latent_traits"] = resp.latent_traits
             responses.append(entry)
 
+        metadata = {
+            "form_title": dataset.form_title,
+            "form_url": dataset.form_url,
+            "total_generated": dataset.total_generated,
+            "total_failed": dataset.total_failed,
+            "generation_started": dataset.generation_started,
+            "generation_completed": dataset.generation_completed,
+            "is_synthetic": True,
+        }
+        if provenance:
+            metadata["provenance"] = provenance
         return {
-            "metadata": {
-                "form_title": dataset.form_title,
-                "form_url": dataset.form_url,
-                "total_generated": dataset.total_generated,
-                "total_failed": dataset.total_failed,
-                "generation_started": dataset.generation_started,
-                "generation_completed": dataset.generation_completed,
-            },
+            "metadata": metadata,
             "questions": [
                 {
                     "question_id": q.question_id,
@@ -70,12 +79,16 @@ class JSONExporter:
         }
 
     @staticmethod
-    def to_json_string(dataset: SurveyDataset, form_schema: FormSchema) -> str:
+    def to_json_string(
+        dataset: SurveyDataset, form_schema: FormSchema, provenance: Optional[dict] = None
+    ) -> str:
         """Convert to a formatted JSON string."""
-        data = JSONExporter.to_dict(dataset, form_schema)
+        data = JSONExporter.to_dict(dataset, form_schema, provenance)
         return json.dumps(data, indent=2, ensure_ascii=False)
 
     @staticmethod
-    def to_json_bytes(dataset: SurveyDataset, form_schema: FormSchema) -> bytes:
+    def to_json_bytes(
+        dataset: SurveyDataset, form_schema: FormSchema, provenance: Optional[dict] = None
+    ) -> bytes:
         """Convert to JSON bytes for download."""
-        return JSONExporter.to_json_string(dataset, form_schema).encode("utf-8")
+        return JSONExporter.to_json_string(dataset, form_schema, provenance).encode("utf-8")

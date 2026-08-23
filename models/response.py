@@ -35,6 +35,10 @@ class GeneratedResponse(BaseModel):
         default_factory=dict,
         description="Latent trait scores of the answering persona (if enabled)",
     )
+    persona_context: dict = Field(
+        default_factory=dict,
+        description="Persona drivers behind the answers (engagement, attitude, etc.)",
+    )
 
 
 class SurveyDataset(BaseModel):

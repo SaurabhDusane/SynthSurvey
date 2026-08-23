@@ -147,6 +147,13 @@ class ResponseGenerator:
         """
         variant = stimulus.get("name") if stimulus else None
         traits = dict(persona.latent_traits) if persona.latent_traits else {}
+        context = {
+            "engagement_level": persona.engagement_level,
+            "attitude_toward_topic": persona.attitude_toward_topic,
+            "background_context": persona.background_context,
+            "interests": list(persona.interests),
+            "personality_traits": list(persona.personality_traits),
+        }
         system_prompt = self._build_system_prompt(persona, form_schema)
         system_prompt += self._augment_prompt(persona, stimulus, wave)
         user_prompt = self._build_questions_prompt(form_schema)
@@ -162,6 +169,7 @@ class ResponseGenerator:
                 wave=wave,
                 stimulus_variant=variant,
                 latent_traits=traits,
+                persona_context=context,
             )
 
         for attempt in range(self.settings.max_retries + 1):

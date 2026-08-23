@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Number of responses generated in parallel (paced by api_call_delay)
     concurrency: int = Field(default=4, alias="CONCURRENCY")
 
+    # Random seed for deterministic quota/trait/stimulus assignment
+    seed: int = Field(default=42, alias="SEED")
+
     # Google Sheets (optional)
     google_sheets_credentials_file: Optional[str] = Field(
         default=None, alias="GOOGLE_SHEETS_CREDENTIALS_FILE"

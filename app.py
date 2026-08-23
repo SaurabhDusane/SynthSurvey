@@ -28,6 +28,12 @@ from models.response import GeneratedResponse, SurveyDataset
 from parsers.google_form_parser import GoogleFormParser
 from providers import PROVIDER_IDS, PROVIDERS
 from services.generation import GenerationService, peek_checkpoint
+from services.provenance import (
+    APP_VERSION,
+    DISCLAIMER,
+    build_manifest,
+    manifest_to_bytes,
+)
 from services.quota import SUPPORTED_ATTRS, build_assignment_plan
 from services.stimulus import build_stimulus_plan
 from services.study import build_study_config, parse_study_config, study_to_bytes
@@ -93,6 +99,7 @@ def init_session_state():
         "enable_traits": False,
         "waves": 1,
         "stimuli": [],
+        "seed": 42,
     }
     # Per-provider API key + model defaults, from the central registry.
     for spec in PROVIDERS.values():
@@ -123,6 +130,7 @@ def get_llm_settings() -> Settings:
     settings.api_call_delay = st.session_state.api_call_delay
     settings.concurrency = st.session_state.concurrency
     settings.max_retries = st.session_state.max_retries
+    settings.seed = int(st.session_state.get("seed", 42))
     return settings
 
 
@@ -165,6 +173,7 @@ def apply_pending_study() -> None:
         setk(mk, mv)
     setk("enable_traits", cfg.get("enable_traits"))
     setk("waves", cfg.get("waves"))
+    setk("seed", cfg.get("seed"))
 
     stimuli = cfg.get("stimuli") or []
     st.session_state["n_variants"] = len(stimuli)
@@ -309,13 +318,13 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("""
+    st.markdown(f"""
     <div style="text-align:center;margin-top:1.5rem;padding-top:.8rem;
                 border-top:1px solid rgba(255,255,255,.04);">
         <span style="font-size:.68rem;color:#5C5775;font-weight:500;
                      background:rgba(255,255,255,.03);padding:3px 10px;
                      border-radius:16px;border:1px solid rgba(255,255,255,.05);">
-            v1.0.0</span>
+            v{APP_VERSION}</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -452,6 +461,12 @@ def render_research_controls() -> None:
             "Longitudinal waves", min_value=1, max_value=5, step=1, key="waves",
             help="Each persona answers once per wave with realistic drift. "
                  "Total responses = personas × waves.",
+        )
+
+        st.number_input(
+            "Random seed", min_value=0, max_value=1_000_000, step=1, key="seed",
+            help="Fixes persona/variant assignment and trait sampling so a run is "
+                 "reproducible. (LLM answers still vary unless temperature = 0.)",
         )
 
         st.markdown("**A/B stimulus variants** (optional)")
@@ -672,7 +687,7 @@ def render_input_page():
 
 def _render_footer():
     """Render the app footer."""
-    st.markdown("""
+    st.markdown(f"""
     <div class="app-footer">
         <div class="footer-links">
             <a href="https://github.com/SaurabhDusane/SynthSurvey" target="_blank">GitHub</a>
@@ -681,7 +696,7 @@ def _render_footer():
             <a href="#">Privacy Policy</a>
         </div>
         <div class="footer-copy">
-            SynthSurvey v1.0.0 &mdash; Built for academic & hackathon use &mdash;
+            SynthSurvey v{APP_VERSION} &mdash; Built for academic & hackathon use &mdash;
             Synthetic data should always be clearly disclosed.
         </div>
     </div>
@@ -889,14 +904,15 @@ def render_generation_page():
     resume = bool(st.session_state.get("resume_generation", False))
     enable_traits = bool(st.session_state.get("enable_traits"))
     waves = int(st.session_state.get("waves", 1) or 1)
+    seed = int(st.session_state.get("seed", 42))
     resume = resume and waves == 1  # multi-wave runs are always fresh
 
-    # Deterministic quota + stimulus plans (empty when unconfigured).
+    # Deterministic quota + stimulus plans (empty when unconfigured), seeded.
     quota_plan = build_assignment_plan(
-        st.session_state.get("quota_targets") or None, num_responses
+        st.session_state.get("quota_targets") or None, num_responses, seed=seed
     )
     stimulus_plan = build_stimulus_plan(
-        st.session_state.get("stimuli") or None, num_responses
+        st.session_state.get("stimuli") or None, num_responses, seed=seed
     )
 
     try:
@@ -908,6 +924,7 @@ def render_generation_page():
             stimulus_plan=stimulus_plan,
             waves=waves,
             enable_traits=enable_traits,
+            traits_seed=seed,
         )
     except ValueError as e:
         st.error(str(e))
@@ -1190,6 +1207,14 @@ def render_results_page():
         <div style="color:var(--text2);margin-top:5px;">{len(df)} total responses</div>
     </div>
     """, unsafe_allow_html=True)
+
+    st.markdown(
+        f'<div class="disclaimer-v2" style="margin:.6rem 0;">'
+        f'<strong>Synthetic dataset (SynthSurvey v{APP_VERSION}).</strong> '
+        f'These are AI-generated responses, not real respondents — see the '
+        f'Export tab for the provenance manifest.</div>',
+        unsafe_allow_html=True,
+    )
 
     st.divider()
 
@@ -1710,7 +1735,7 @@ def render_persona_gallery(dataset: SurveyDataset):
                 rest = ". ".join(resp.persona_summary.split(". ")[1:]) if ". " in resp.persona_summary else ""
 
                 st.markdown(
-                    f'<div class="persona-card-v2" style="margin-bottom:.6rem;">'
+                    f'<div class="persona-card-v2" style="margin-bottom:.4rem;">'
                     f'<div class="persona-name">'
                     f'<span style="color:{success_color};font-size:.6rem;margin-right:6px;">{success_icon}</span>'
                     f'#{global_idx} &mdash; {_esc(name)}</div>'
@@ -1721,6 +1746,30 @@ def render_persona_gallery(dataset: SurveyDataset):
                     f'</div></div>',
                     unsafe_allow_html=True,
                 )
+                _render_why(resp)
+
+
+def _render_why(resp) -> None:
+    """A 'why this answer' trace: the persona drivers behind the responses (F4.3)."""
+    ctx = getattr(resp, "persona_context", None) or {}
+    traits = getattr(resp, "latent_traits", None) or {}
+    if not ctx and not traits:
+        return
+    with st.expander("Why these answers?"):
+        if ctx.get("engagement_level"):
+            st.markdown(f"**Engagement:** {_esc(str(ctx['engagement_level']))} "
+                        "— sets answer depth and effort.")
+        if ctx.get("attitude_toward_topic"):
+            st.markdown(f"**Attitude:** {_esc(str(ctx['attitude_toward_topic']))}")
+        if ctx.get("background_context"):
+            st.markdown(f"**Background:** {_esc(str(ctx['background_context']))}")
+        if traits:
+            hi = ", ".join(f"{k} {v:.2f}" for k, v in sorted(traits.items(), key=lambda x: -x[1])[:3])
+            st.markdown(f"**Top latent traits:** {_esc(hi)} — these drive correlated answers.")
+        if resp.stimulus_variant:
+            st.markdown(f"**Saw variant:** {_esc(str(resp.stimulus_variant))}")
+        if getattr(resp, "wave", 1) != 1:
+            st.markdown(f"**Wave:** {resp.wave} (answers reflect drift over time)")
 
 
 def render_charts(schema: FormSchema, df: pd.DataFrame):
@@ -1812,11 +1861,26 @@ def render_charts(schema: FormSchema, df: pd.DataFrame):
 
 def render_export(schema: FormSchema, dataset: SurveyDataset, df: pd.DataFrame):
     st.markdown("##### Download Your Data")
-    st.markdown("")
+    st.markdown(
+        f'<div class="disclaimer-v2" style="margin-bottom:1rem;">'
+        f'<strong>Synthetic data.</strong> {_esc(DISCLAIMER)} A provenance '
+        f'manifest is embedded in the JSON export and downloadable below.</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Provenance manifest (embedded in JSON, and downloadable on its own).
+    try:
+        manifest = build_manifest(
+            dataset, schema, get_llm_settings(),
+            study_config=build_study_config(st.session_state),
+            seed=int(st.session_state.get("seed", 42)),
+        )
+    except Exception:  # noqa: BLE001
+        manifest = None
 
     safe_title = schema.form_title[:30].replace(' ', '_').replace('/', '_')
     csv_bytes = CSVExporter.to_csv_bytes(df)
-    json_bytes = JSONExporter.to_json_bytes(dataset, schema)
+    json_bytes = JSONExporter.to_json_bytes(dataset, schema, provenance=manifest)
 
     # Excel bytes
     import io as _io
@@ -1895,6 +1959,23 @@ def render_export(schema: FormSchema, dataset: SurveyDataset, df: pd.DataFrame):
         )
 
     st.divider()
+
+    if manifest is not None:
+        mc1, mc2 = st.columns([1, 2])
+        with mc1:
+            st.download_button(
+                "Download provenance manifest (.json)",
+                data=manifest_to_bytes(manifest),
+                file_name=f"synthsurvey_{safe_title}_manifest.json",
+                mime="application/json", width="stretch", key="manifest_download",
+            )
+        with mc2:
+            st.caption(
+                f"Auditable record: tool v{manifest['version']}, "
+                f"model {manifest['generation']['provider']}/{manifest['generation']['model']}, "
+                f"seed {manifest['generation']['seed']}, config hash "
+                f"`{manifest['config_hash']}`."
+            )
 
     with st.expander("Raw JSON Preview"):
         json_str = json_bytes.decode("utf-8")

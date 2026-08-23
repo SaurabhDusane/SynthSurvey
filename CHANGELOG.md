@@ -6,6 +6,20 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Added — Trust, safety & provenance (feature phase 4)
+- Provenance manifest (`services/provenance.py`): tool version, model, seed,
+  study config, content hash, and a synthetic-data disclaimer — embedded in the
+  JSON export and downloadable separately.
+- Seeded reproducibility: a configurable random seed threads through quota,
+  trait, and stimulus assignment (stored in study configs and the manifest).
+- "Why this answer" trace: responses carry `persona_context`; the Personas
+  gallery explains the drivers (engagement, attitude, traits, stimulus, wave).
+- Clearer synthetic disclosure banners in the app and exports; JSON metadata
+  marked `is_synthetic`.
+
+### Changed
+- Replaced deprecated `use_container_width` with `width="stretch"` throughout.
+
 ### Added — Insight, QA & reuse (feature phase 3)
 - Cross-tab significance testing (`analysis/stats.py`): chi-square, p-value, and
   Cramér's V computed from a self-contained incomplete-gamma function (no scipy),

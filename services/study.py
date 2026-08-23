@@ -32,6 +32,7 @@ STUDY_KEYS = [
     "enable_traits",
     "waves",
     "stimuli",
+    "seed",
 ]
 
 

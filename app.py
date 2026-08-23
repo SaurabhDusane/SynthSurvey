@@ -219,7 +219,7 @@ with st.sidebar:
 
         is_active = st.session_state.page == key
         btn_label = f"{'>' if is_active else '  '} {label}"
-        if st.button(btn_label, key=f"nav_{key}", disabled=disabled, use_container_width=True):
+        if st.button(btn_label, key=f"nav_{key}", disabled=disabled, width="stretch"):
             st.session_state.page = key
             st.rerun()
 
@@ -283,7 +283,7 @@ with st.sidebar:
     )
 
     # Test Connection button
-    if st.button("Test Connection", use_container_width=True, key="sidebar_test_conn"):
+    if st.button("Test Connection", width="stretch", key="sidebar_test_conn"):
         if not check_api_key():
             st.error("Enter an API key first.")
         else:
@@ -424,12 +424,12 @@ def render_study_templates() -> None:
             data=study_to_bytes(build_study_config(st.session_state)),
             file_name="synthsurvey_study.json",
             mime="application/json",
-            use_container_width=True,
+            width="stretch",
             key="study_download",
         )
         up = st.file_uploader("Load a study config", type=["json"], key="study_upload")
         if up is not None and st.button(
-            "Apply loaded study", key="study_apply", use_container_width=True
+            "Apply loaded study", key="study_apply", width="stretch"
         ):
             try:
                 st.session_state["_pending_study"] = parse_study_config(up.getvalue())
@@ -634,7 +634,7 @@ def render_input_page():
 
     bc, _, _ = st.columns([2, 1, 1])
     with bc:
-        if st.button("Parse Form & Continue", type="primary", use_container_width=True):
+        if st.button("Parse Form & Continue", type="primary", width="stretch"):
             if not form_url:
                 st.error("Please enter a Google Form URL.")
                 return
@@ -794,11 +794,11 @@ def render_preview_page():
 
     n1, n2, _ = st.columns([1, 1, 2])
     with n1:
-        if st.button("Back to Input", use_container_width=True):
+        if st.button("Back to Input", width="stretch"):
             st.session_state.page = "input"
             st.rerun()
     with n2:
-        if st.button("Start Generation", type="primary", use_container_width=True):
+        if st.button("Start Generation", type="primary", width="stretch"):
             if not check_api_key():
                 st.error("Please set your API key in the sidebar.")
                 return
@@ -834,13 +834,13 @@ def render_generation_page():
         st.success(f"Generation complete! {st.session_state.dataset.total_generated} responses generated.")
         c1, c2, _ = st.columns([1, 1, 2])
         with c1:
-            if st.button("Regenerate", use_container_width=True):
+            if st.button("Regenerate", width="stretch"):
                 st.session_state.dataset = None
                 st.session_state.generated_count = 0
                 st.session_state.failed_count = 0
                 st.rerun()
         with c2:
-            if st.button("View Results", type="primary", use_container_width=True):
+            if st.button("View Results", type="primary", width="stretch"):
                 st.session_state.page = "results"
                 st.rerun()
         return
@@ -876,7 +876,7 @@ def render_generation_page():
         bc, _, _ = st.columns([2, 1, 1])
         with bc:
             btn_label = "Resume Generation" if resume else "Begin Generation"
-            if st.button(btn_label, type="primary", use_container_width=True):
+            if st.button(btn_label, type="primary", width="stretch"):
                 st.session_state.generation_in_progress = True
                 st.rerun()
         return
@@ -925,7 +925,7 @@ def render_generation_page():
     stop_col, _ = st.columns([1, 3])
     with stop_col:
         stop_holder = st.empty()
-        if stop_holder.button("Stop Generation", type="secondary", use_container_width=True, key="stop_gen_btn"):
+        if stop_holder.button("Stop Generation", type="secondary", width="stretch", key="stop_gen_btn"):
             st.session_state.stop_generation = True
 
     st.divider()
@@ -1047,7 +1047,7 @@ def render_generation_page():
     _render_generation_report(report_log, provider, model_name, elapsed, generated, failed)
 
     if generated > 0:
-        if st.button("View Results", type="primary", use_container_width=True):
+        if st.button("View Results", type="primary", width="stretch"):
             st.session_state.page = "results"
             st.rerun()
 
@@ -1135,7 +1135,7 @@ def _render_generation_report(
         display_cols = ["response_num", "status", "persona_name", "error_type"]
         available_cols = [c for c in display_cols if c in log_df.columns]
         styled = log_df[available_cols].style.map(_style_status, subset=["status"])
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.dataframe(styled, width="stretch", hide_index=True)
 
     # Downloadable report
     report_json = json.dumps({
@@ -1163,7 +1163,7 @@ def _render_generation_report(
         data=report_json,
         file_name=f"synthsurvey_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
         mime="application/json",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -1235,7 +1235,7 @@ def render_results_page():
                 f'{badge_label} &mdash; {fill_rate:.0f}% fill rate</span></div>',
                 unsafe_allow_html=True,
             )
-        st.dataframe(df, use_container_width=True, height=500)
+        st.dataframe(df, width="stretch", height=500)
 
     with tabs["Charts"]:
         render_charts(schema, df)
@@ -1361,7 +1361,7 @@ def render_fidelity(schema: FormSchema, df: pd.DataFrame):
             font=dict(family="Inter", color="#E8E6F0"),
             height=max(300, len(pq) * 38), yaxis_title="", xaxis_title="Similarity",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         with st.expander("Per-question detail"):
             st.dataframe(
                 pq.rename(columns={
@@ -1369,7 +1369,7 @@ def render_fidelity(schema: FormSchema, df: pd.DataFrame):
                     "similarity": "Similarity %", "tvd": "Distance",
                     "n_ref": "Real n", "n_syn": "Synthetic n",
                 }),
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
     for note in result["notes"]:
         st.caption(note)
@@ -1417,7 +1417,7 @@ def render_insights(schema: FormSchema, df: pd.DataFrame):
         st.info("Not enough data to cross-tabulate these two.")
         return
 
-    st.dataframe(res["table"], use_container_width=True)
+    st.dataframe(res["table"], width="stretch")
 
     p, v = res["p_value"], res["cramers_v"]
     if p is None:
@@ -1441,7 +1441,7 @@ def render_insights(schema: FormSchema, df: pd.DataFrame):
     fig = px.bar(long, x=res["table"].index.name, y="count", color=b, barmode="group",
                  title=f"{a[:40]} × {b[:40]}", template="plotly_dark")
     fig.update_layout(**_PLOTLY_DARK)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_ab_comparison(schema: FormSchema, df: pd.DataFrame):
@@ -1468,7 +1468,7 @@ def render_ab_comparison(schema: FormSchema, df: pd.DataFrame):
             fig = px.bar(pd.DataFrame(rows), x="Question", y="Mean rating", color="Variant",
                          barmode="group", title="Mean scale rating by variant", template="plotly_dark")
             fig.update_layout(**_PLOTLY_DARK)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     choice_qs = [q for q in schema.questions
                  if q.question_type in (QuestionType.MULTIPLE_CHOICE, QuestionType.DROPDOWN)
@@ -1480,7 +1480,7 @@ def render_ab_comparison(schema: FormSchema, df: pd.DataFrame):
         fig = px.bar(ct, x=c, y="percent", color="stimulus_variant", barmode="group",
                      title=f"{c[:50]} — share by variant", template="plotly_dark")
         fig.update_layout(**_PLOTLY_DARK, yaxis_title="%", legend_title="Variant")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 def render_waves(schema: FormSchema, df: pd.DataFrame):
@@ -1511,7 +1511,7 @@ def render_waves(schema: FormSchema, df: pd.DataFrame):
                       markers=True, title="Mean scale rating drift across waves", template="plotly_dark")
         fig.update_layout(**_PLOTLY_DARK)
         fig.update_xaxes(dtick=1)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: SurveyDataset):
@@ -1597,10 +1597,10 @@ def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: Surv
         )
         fig.update_layout(**layout_common, height=max(300, len(diversity_data) * 35))
         fig.update_traces(marker_cornerradius=6)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         with st.expander("Detailed Diversity Table"):
-            st.dataframe(div_df, use_container_width=True, hide_index=True)
+            st.dataframe(div_df, width="stretch", hide_index=True)
 
     # --- Persona trait distributions ---
     if dataset.responses:
@@ -1628,7 +1628,7 @@ def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: Surv
                              color_discrete_sequence=colors, template="plotly_dark")
                 fig.update_layout(**layout_common)
                 fig.update_traces(textinfo="label+percent", textfont_size=12)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
             with pc2:
                 # Response length distribution for text questions
@@ -1646,7 +1646,7 @@ def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: Surv
                                        color_discrete_sequence=[colors[2]])
                     fig.update_layout(**layout_common)
                     fig.update_traces(marker_cornerradius=6)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                 else:
                     st.info("No text questions to analyze response length.")
 
@@ -1680,11 +1680,11 @@ def render_persona_gallery(dataset: SurveyDataset):
     if total_pages > 1:
         pg_cols = st.columns([1, 1, 4])
         with pg_cols[0]:
-            if st.button("Previous", disabled=st.session_state[page_key] <= 0, key="pg_prev", use_container_width=True):
+            if st.button("Previous", disabled=st.session_state[page_key] <= 0, key="pg_prev", width="stretch"):
                 st.session_state[page_key] -= 1
                 st.rerun()
         with pg_cols[1]:
-            if st.button("Next", disabled=st.session_state[page_key] >= total_pages - 1, key="pg_next", use_container_width=True):
+            if st.button("Next", disabled=st.session_state[page_key] >= total_pages - 1, key="pg_next", width="stretch"):
                 st.session_state[page_key] += 1
                 st.rerun()
 
@@ -1767,7 +1767,7 @@ def render_charts(schema: FormSchema, df: pd.DataFrame):
                      color="Option", color_discrete_sequence=colors, template="plotly_dark")
         fig.update_layout(**layout_common, showlegend=False)
         fig.update_traces(marker_line_width=0, marker_cornerradius=8)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         if "is_synthetic" in df.columns and df["is_synthetic"].nunique() > 1:
             st.markdown("##### Real vs Synthetic")
@@ -1779,7 +1779,7 @@ def render_charts(schema: FormSchema, df: pd.DataFrame):
                           template="plotly_dark")
             fig2.update_layout(**layout_common)
             fig2.update_traces(marker_cornerradius=8)
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width="stretch")
 
     elif qt == QuestionType.LINEAR_SCALE:
         numeric_col = pd.to_numeric(df[col_name], errors="coerce")
@@ -1791,7 +1791,7 @@ def render_charts(schema: FormSchema, df: pd.DataFrame):
                            template="plotly_dark", color_discrete_sequence=[colors[0]])
         fig.update_layout(**layout_common)
         fig.update_traces(marker_cornerradius=6)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.markdown(
             f"**Mean:** {numeric_col.mean():.2f} | "
             f"**Median:** {numeric_col.median():.1f} | "
@@ -1807,7 +1807,7 @@ def render_charts(schema: FormSchema, df: pd.DataFrame):
                      color="Option", color_discrete_sequence=colors, template="plotly_dark")
         fig.update_layout(**layout_common, showlegend=False)
         fig.update_traces(marker_line_width=0, marker_cornerradius=8)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 def render_export(schema: FormSchema, dataset: SurveyDataset, df: pd.DataFrame):
@@ -1846,7 +1846,7 @@ def render_export(schema: FormSchema, dataset: SurveyDataset, df: pd.DataFrame):
         st.download_button(
             label="Download CSV", data=csv_bytes,
             file_name=f"synthsurvey_{safe_title}.csv",
-            mime="text/csv", use_container_width=True,
+            mime="text/csv", width="stretch",
         )
 
     with c2:
@@ -1861,7 +1861,7 @@ def render_export(schema: FormSchema, dataset: SurveyDataset, df: pd.DataFrame):
         st.download_button(
             label="Download JSON", data=json_bytes,
             file_name=f"synthsurvey_{safe_title}.json",
-            mime="application/json", use_container_width=True,
+            mime="application/json", width="stretch",
         )
 
     with c3:
@@ -1877,7 +1877,7 @@ def render_export(schema: FormSchema, dataset: SurveyDataset, df: pd.DataFrame):
             label="Download Excel", data=xlsx_bytes,
             file_name=f"synthsurvey_{safe_title}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
 
     with c4:
@@ -1890,7 +1890,7 @@ def render_export(schema: FormSchema, dataset: SurveyDataset, df: pd.DataFrame):
         </div>
         """, unsafe_allow_html=True)
         st.button(
-            "Export to Sheets", disabled=True, use_container_width=True,
+            "Export to Sheets", disabled=True, width="stretch",
             help="Configure Google Sheets credentials in .env to enable.",
         )
 

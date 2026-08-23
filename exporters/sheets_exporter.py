@@ -1,6 +1,5 @@
 """Optional Google Sheets export for survey datasets."""
 
-from typing import Optional
 
 import pandas as pd
 

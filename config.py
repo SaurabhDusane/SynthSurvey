@@ -1,10 +1,10 @@
 """Configuration and environment variables for SynthSurvey."""
 
 from pathlib import Path
-
-from pydantic_settings import BaseSettings
-from pydantic import Field
 from typing import Optional
+
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 from providers import PROVIDERS
 
@@ -52,10 +52,12 @@ class Settings(BaseSettings):
     default_response_count: int = 50
     max_response_count: int = 500
     max_retries: int = 2
-    batch_persona_size: int = 5
 
     # Default university
     default_university: str = "Arizona State University"
+
+    # Logging
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     model_config = {
         "env_file": str(_ENV_FILE),

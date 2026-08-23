@@ -16,6 +16,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from models.form_schema import (
+    GOOGLE_FORM_TYPE_MAP,
     FormQuestion,
     FormSchema,
     FormSection,
@@ -23,7 +24,6 @@ from models.form_schema import (
     QuestionType,
     ScaleConfig,
     ValidationRule,
-    GOOGLE_FORM_TYPE_MAP,
 )
 
 logger = logging.getLogger(__name__)

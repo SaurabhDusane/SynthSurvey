@@ -6,13 +6,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import json
+
 import pytest
+
 from models.form_schema import (
-    FormSchema,
     FormQuestion,
+    FormSchema,
+    GridConfig,
     QuestionType,
     ScaleConfig,
-    GridConfig,
 )
 from parsers.google_form_parser import GoogleFormParser, _safe_get
 

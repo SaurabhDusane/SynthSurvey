@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pytest
 
 from config import Settings
-from models.form_schema import FormSchema, FormQuestion, QuestionType
+from models.form_schema import FormQuestion, FormSchema, QuestionType
 from services.generation import GenerationService, peek_checkpoint, run_key
 
 

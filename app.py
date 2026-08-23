@@ -1,33 +1,35 @@
 """SynthSurvey — Streamlit web application for synthetic survey data generation."""
 
-import sys
-import os
-import time
 import json
-from datetime import datetime, timezone
+import os
+import sys
+import time
+from datetime import datetime
 from html import escape as _esc
 from pathlib import Path
-from typing import Optional
 
-import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
+import streamlit as st
 
 # Ensure project root is on the path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import get_settings, Settings
-from providers import PROVIDERS, PROVIDER_IDS
+from config import Settings, get_settings
+from exporters.csv_exporter import CSVExporter
+from exporters.json_exporter import JSONExporter
 from models.form_schema import FormSchema, QuestionType
 from models.persona import Persona
 from models.response import GeneratedResponse, SurveyDataset
 from parsers.google_form_parser import GoogleFormParser
+from providers import PROVIDER_IDS, PROVIDERS
 from services.generation import GenerationService, peek_checkpoint
-from exporters.csv_exporter import CSVExporter
-from exporters.json_exporter import JSONExporter
 from utils.llm_client import LLMClient
-from utils.validators import ResponseValidator
+from utils.logging_config import setup_logging
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+
+setup_logging(get_settings().log_level)
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
 
@@ -63,7 +65,7 @@ def init_session_state():
         "page": "input",
         "form_schema": None,
         "form_url": "",
-        "num_responses": 50,
+        "num_responses": get_settings().default_response_count,
         "persona_constraints": "",
         "existing_data": None,
         "llm_provider": "openai",
@@ -91,6 +93,35 @@ def init_session_state():
 
 
 init_session_state()
+
+
+# ─── Settings helpers (defined before the sidebar, which calls them) ──────────
+
+
+def get_llm_settings() -> Settings:
+    """Build Settings object from session state."""
+    settings = get_settings()
+    settings.llm_provider = st.session_state.llm_provider
+    # Map all provider keys and models from session state via the registry.
+    for spec in PROVIDERS.values():
+        if st.session_state.get(spec.session_key):
+            setattr(settings, spec.key_attr, st.session_state[spec.session_key])
+        if st.session_state.get(spec.model_attr):
+            setattr(settings, spec.model_attr, st.session_state[spec.model_attr])
+    settings.temperature = st.session_state.temperature
+    settings.api_call_delay = st.session_state.api_call_delay
+    settings.concurrency = st.session_state.concurrency
+    settings.max_retries = st.session_state.max_retries
+    return settings
+
+
+def check_api_key() -> bool:
+    """Check if the required API key is set."""
+    spec = PROVIDERS.get(st.session_state.llm_provider)
+    if spec is None:
+        return False
+    return bool(st.session_state.get(spec.session_key) or os.environ.get(spec.env_var, ""))
+
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
@@ -242,31 +273,6 @@ with st.sidebar:
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def get_llm_settings() -> Settings:
-    """Build Settings object from session state."""
-    settings = get_settings()
-    settings.llm_provider = st.session_state.llm_provider
-    # Map all provider keys and models from session state via the registry.
-    for spec in PROVIDERS.values():
-        if st.session_state.get(spec.session_key):
-            setattr(settings, spec.key_attr, st.session_state[spec.session_key])
-        if st.session_state.get(spec.model_attr):
-            setattr(settings, spec.model_attr, st.session_state[spec.model_attr])
-    settings.temperature = st.session_state.temperature
-    settings.api_call_delay = st.session_state.api_call_delay
-    settings.concurrency = st.session_state.concurrency
-    settings.max_retries = st.session_state.max_retries
-    return settings
-
-
-def check_api_key() -> bool:
-    """Check if the required API key is set."""
-    spec = PROVIDERS.get(st.session_state.llm_provider)
-    if spec is None:
-        return False
-    return bool(st.session_state.get(spec.session_key) or os.environ.get(spec.env_var, ""))
-
-
 def _type_icon(qt: QuestionType) -> str:
     m = {
         QuestionType.SHORT_TEXT: "Aa", QuestionType.PARAGRAPH: "Pg",
@@ -313,7 +319,7 @@ def render_input_page():
         with sc1:
             st.markdown("##### Responses")
             num_responses = st.number_input(
-                "n", min_value=1, max_value=500,
+                "n", min_value=1, max_value=get_settings().max_response_count,
                 value=st.session_state.num_responses, step=10,
                 key="input_num_responses", label_visibility="collapsed",
             )
@@ -902,9 +908,9 @@ def _render_generation_report(
         st.markdown("###### Error Breakdown")
         for et, info in error_types.items():
             with st.expander(f"{et}  —  {info['count']} occurrence{'s' if info['count'] > 1 else ''}", expanded=(len(error_types) == 1)):
-                st.markdown(f"**Sample error:**")
+                st.markdown("**Sample error:**")
                 st.code(info["sample_msg"][:500] if info["sample_msg"] else "No message", language=None)
-                st.markdown(f"**How to fix:**")
+                st.markdown("**How to fix:**")
                 st.info(info["suggestion"] or "No suggestion available")
 
     # Per-response log (collapsible)
@@ -992,7 +998,7 @@ def render_results_page():
     with tab_data:
         # Quality score
         if "is_synthetic" in df.columns:
-            synth_df = df[df["is_synthetic"] == True]
+            synth_df = df[df["is_synthetic"].astype(bool)]
             filled = synth_df.notna().sum().sum()
             total_cells = synth_df.shape[0] * synth_df.shape[1]
             fill_rate = (filled / total_cells * 100) if total_cells > 0 else 0

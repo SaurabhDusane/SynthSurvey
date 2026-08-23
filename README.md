@@ -190,6 +190,10 @@ streamlit run app.py
 | **Mistral** | Mistral Large, Medium, Small, Mixtral 8x22B | No |
 | **Cohere** | Command R+, Command R, Command Light | Yes (limited) |
 
+> The selectable models are defined in one place — [`providers.py`](providers.py).
+> Providers retire and rename models over time; if a model errors with
+> "not found," pick another from the sidebar or update the registry.
+
 > **Tip:** Groq offers the most generous free tier — great for testing.
 
 ## Cost Estimates

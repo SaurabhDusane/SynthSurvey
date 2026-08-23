@@ -1,12 +1,11 @@
 """Persona + Form → filled response generation using LLM."""
 
 import json
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import Settings
-from models.form_schema import FormSchema, FormQuestion, QuestionType
+from models.form_schema import FormSchema
 from models.persona import Persona
 from models.response import GeneratedResponse
 from utils.llm_client import LLMClient
@@ -151,7 +150,7 @@ class ResponseGenerator:
                         retry_count=attempt,
                     )
 
-            except (json.JSONDecodeError, TypeError) as e:
+            except (json.JSONDecodeError, TypeError):
                 if attempt >= self.settings.max_retries:
                     # Return a failed response
                     return GeneratedResponse(

@@ -1,0 +1,35 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+# E501: long lines (many inline HTML/CSS strings); E402: imports after the
+# sys.path bootstrap in app.py and the test modules; E701: intentional compact
+# one-line conditionals in tight rendering loops.
+ignore = ["E501", "E402", "E701"]
+
+[tool.ruff.lint.per-file-ignores]
+# Package __init__ files re-export symbols for convenience.
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "config", "providers", "models", "parsers", "generators",
+    "exporters", "services", "utils",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Pragmatic defaults — not strict; tighten over time.
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

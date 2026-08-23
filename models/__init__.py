@@ -2,8 +2,8 @@
 
 from models.form_schema import (
     FormQuestion,
-    FormSection,
     FormSchema,
+    FormSection,
     QuestionType,
 )
 from models.persona import Persona

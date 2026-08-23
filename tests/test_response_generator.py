@@ -6,12 +6,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
+
 from models.form_schema import (
-    FormSchema,
     FormQuestion,
+    FormSchema,
     QuestionType,
     ScaleConfig,
-    GridConfig,
 )
 from models.response import GeneratedResponse, SurveyDataset
 from utils.validators import ResponseValidator, fix_response

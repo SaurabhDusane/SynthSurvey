@@ -1,7 +1,7 @@
 """Tests for CSV and JSON exporters."""
 
-import sys
 import json
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -9,10 +9,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pandas as pd
 import pytest
 
-from models.form_schema import FormSchema, FormQuestion, QuestionType
-from models.response import GeneratedResponse, SurveyDataset
 from exporters.csv_exporter import CSVExporter
 from exporters.json_exporter import JSONExporter
+from models.form_schema import FormQuestion, FormSchema, QuestionType
+from models.response import GeneratedResponse, SurveyDataset
 
 
 def _make_schema() -> FormSchema:
@@ -101,8 +101,8 @@ class TestCSVExporter:
         df = CSVExporter.to_dataframe(dataset, schema, existing_data=existing)
 
         assert len(df) == 3
-        assert df["is_synthetic"].iloc[0] == False
-        assert df["is_synthetic"].iloc[1] == True
+        assert not df["is_synthetic"].iloc[0]
+        assert df["is_synthetic"].iloc[1]
 
     def test_to_csv_string(self):
         schema = _make_schema()

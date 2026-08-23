@@ -14,8 +14,8 @@ from config import Settings
 from utils.llm_client import (
     LLMClient,
     RateLimiter,
-    classify_error,
     _extract_status_code,
+    classify_error,
 )
 
 

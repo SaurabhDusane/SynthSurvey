@@ -1,6 +1,5 @@
 """CSV export for survey datasets."""
 
-import io
 from typing import Optional
 
 import pandas as pd

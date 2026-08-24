@@ -1,7 +1,7 @@
+# Server binding is managed by the host (Streamlit Cloud, or the $PORT flag in
+# Procfile / render.yaml), so it's intentionally not hardcoded here.
 [server]
 headless = true
-address = "0.0.0.0"
-port = 8501
 
 [theme]
 primaryColor = "#F59E0B"

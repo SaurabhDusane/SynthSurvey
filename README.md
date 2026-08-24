@@ -4,9 +4,13 @@ Generate realistic synthetic survey responses from any Google Form using LLM-pow
 
 ## Live Demo
 
-No hosted demo is currently published. See [Deployment](#deployment) to run
-your own in a couple of minutes on Streamlit Community Cloud, Render, or
-locally. Once deployed, add your URL here.
+<!-- After deploying (see Deployment below), replace the line under this comment
+     with your live URL, e.g.:
+     **▶️ [synthsurvey.streamlit.app](https://synthsurvey.streamlit.app)**
+-->
+Not yet published — see [Deployment](#deployment) to launch your own on
+Streamlit Community Cloud in ~3 minutes (no API key needed to host; visitors
+bring their own).
 
 ## Features
 
@@ -171,19 +175,29 @@ python -m pytest tests/ -v
 
 ## Deployment
 
-### Option 1: Streamlit Community Cloud (Free)
+### Option 1: Streamlit Community Cloud (Free — recommended)
 
-1. Push this repo to GitHub
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Click **New app** → select your repo → set **Main file path** to `app.py`
-4. Under **Advanced settings**, add your API keys as secrets:
-   ```toml
-   OPENAI_API_KEY = "sk-..."
-   ANTHROPIC_API_KEY = "sk-ant-..."
-   ```
-5. Click **Deploy**
+1. Push this repo to GitHub (already done if you're reading this there).
+2. Go to [share.streamlit.io](https://share.streamlit.io) and sign in with GitHub.
+3. Click **Create app** → **Deploy a public app from GitHub**.
+4. Set:
+   - **Repository:** `SaurabhDusane/SynthSurvey`
+   - **Branch:** `main`
+   - **Main file path:** `app.py`
+5. (Optional) Under **Advanced settings**, choose **Python 3.11**.
+6. Click **Deploy**. First build takes ~2–3 minutes.
+
+**No secrets required** — the app is bring-your-own-key: each visitor pastes
+their own provider API key into the sidebar (it stays in their session and is
+never stored). Groq offers the most generous free tier for testing.
+
+> Want a shared key instead (you pay for everyone's usage)? Add it under
+> **Advanced settings → Secrets**, e.g. `GROQ_API_KEY = "gsk_..."`. Streamlit
+> exposes secrets as environment variables, which the app reads automatically.
 
 > ⚠️ Streamlit Community Cloud apps go to sleep after a period of inactivity and take a few seconds to wake up on the next visit.
+
+The app **auto-redeploys on every push to `main`** — no extra step to ship updates.
 
 ### Option 2: Render.com (Free — Always Online)
 

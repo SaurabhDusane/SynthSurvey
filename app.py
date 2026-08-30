@@ -71,6 +71,23 @@ _DARK_OVERRIDE = """
     --text1:#FAF5EF; --text2:#B8A99A; --text3:#8a7f74;
 }
 .stApp, [data-testid="stHeader"] { background:#0c0a09 !important; }
+/* Native widget surfaces that inherit Streamlit's light theme — darken them.
+   Solid backgrounds on the actual input elements so no light layer bleeds through. */
+.stTextInput input, .stTextArea textarea, .stNumberInput input,
+[data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="textarea"],
+.stTextInput > div > div, .stNumberInput > div > div, .stTextArea > div > div,
+.stSelectbox > div > div, [data-baseweb="select"] > div,
+[data-testid="stFileUploaderDropzone"], [data-testid="stFileUploader"] section {
+    background-color:#17120e !important; color:var(--text1) !important;
+}
+.stNumberInput button, [data-testid="stNumberInputStepUp"], [data-testid="stNumberInputStepDown"],
+[data-testid="stFileUploader"] button {
+    background:#211a13 !important; color:var(--text1) !important;
+    border-color:var(--border-glass) !important;
+}
+[data-baseweb="popover"] [role="listbox"], [data-baseweb="menu"],
+[data-baseweb="popover"] ul, [data-baseweb="popover"] div { background-color:#17120e !important; }
+[data-testid="stDataFrame"] { background:#17120e !important; }
 """
 
 
@@ -224,12 +241,11 @@ apply_pending_study()
 with st.sidebar:
     st.markdown("""
     <div style="text-align:center;padding:1rem 0 .3rem;">
-        <div style="font-size:2rem;font-weight:900;letter-spacing:-0.03em;
-                    background:linear-gradient(135deg,#F59E0B,#FB923C);
-                    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-                    background-clip:text;">SynthSurvey</div>
-        <div style="font-size:.7rem;color:#5C5775;text-transform:uppercase;
-                    letter-spacing:.14em;font-weight:600;margin-top:2px;">
+        <div style="font-family:var(--font-display);font-size:1.9rem;font-weight:800;
+                    letter-spacing:-0.04em;color:var(--text1)!important;">
+            Synth<span style="color:var(--accent)!important;">Survey</span></div>
+        <div style="font-size:.66rem;color:var(--text3)!important;text-transform:uppercase;
+                    letter-spacing:.18em;font-weight:600;margin-top:4px;">
             Synthetic Data Engine</div>
     </div>
     """, unsafe_allow_html=True)

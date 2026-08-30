@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 /* ── CSS Variables ─────────────────────────────────────────────────── */
 /* Default palette is LIGHT. app.py injects a dark override when the
@@ -19,16 +19,25 @@
     --text1: #1c1917;
     --text2: #57534e;
     --text3: #8a827b;
-    --radius: 14px;
-    --radius-lg: 22px;
-    --smooth: all 0.35s cubic-bezier(.25,.46,.45,.94);
+    --radius: 12px;
+    --radius-lg: 20px;
+    --smooth: all 0.28s cubic-bezier(.4,0,.2,1);
+    /* Typography */
+    --font-display: 'Bricolage Grotesque', 'Inter', -apple-system, sans-serif;
+    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 /* ── Global ────────────────────────────────────────────────────────── */
 .stApp {
     background: var(--bg-primary) !important;
-    font-family: 'Inter', -apple-system, sans-serif !important;
+    font-family: var(--font-body) !important;
     color: var(--text1) !important;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv11", "ss01";
+    font-size: 15px;
 }
 .stApp::before {
     content: '';
@@ -60,33 +69,41 @@ section[data-testid="stSidebar"] h3 { color: var(--text1) !important; }
 
 /* ── Typography ────────────────────────────────────────────────────── */
 h1,h2,h3,h4,h5,h6 {
-    font-family:'Inter',sans-serif !important;
+    font-family:var(--font-display) !important;
     font-weight:700 !important;
     color:var(--text1) !important;
     letter-spacing:-0.02em !important;
+    line-height:1.15 !important;
+    text-wrap:balance;
 }
-h1 { font-size:2.2rem !important; font-weight:800 !important; }
+h1 { font-size:2.35rem !important; font-weight:800 !important; letter-spacing:-0.035em !important; }
+h2 { font-size:1.55rem !important; letter-spacing:-0.025em !important; }
+h3 { font-size:1.2rem !important; }
+h4,h5 { font-size:1.02rem !important; font-weight:600 !important; letter-spacing:-0.01em !important; }
+p,li { line-height:1.65 !important; }
 p,li,span,div { color:var(--text1) !important; }
+/* Markdown copy reads calmer at text2 weight where not a heading. */
+.main p { color:var(--text2) !important; font-size:.95rem !important; }
+code, kbd, pre, .mono { font-family:var(--font-mono) !important; }
 
 /* ── Buttons ───────────────────────────────────────────────────────── */
 .stButton>button {
-    background: linear-gradient(135deg,rgba(245,158,11,.12),rgba(20,184,166,.08)) !important;
+    background: rgba(245,158,11,.10) !important;
     color:var(--text1) !important;
-    border:1px solid rgba(245,158,11,.18) !important;
+    border:1px solid rgba(245,158,11,.22) !important;
     border-radius: var(--radius) !important;
-    padding:.65rem 1.5rem !important;
-    font-weight:600 !important; font-family:'Inter',sans-serif !important;
-    font-size:.9rem !important;
+    padding:.6rem 1.4rem !important;
+    font-weight:600 !important; font-family:var(--font-body) !important;
+    font-size:.88rem !important;
     transition: var(--smooth) !important;
-    box-shadow: 0 1px 8px rgba(0,0,0,.15) !important;
-    letter-spacing:.01em !important;
-    backdrop-filter:blur(8px) !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,.05) !important;
+    letter-spacing:-0.003em !important;
 }
 .stButton>button:hover {
-    transform:translateY(-2px) !important;
-    box-shadow: 0 4px 18px rgba(245,158,11,.15) !important;
-    background: linear-gradient(135deg,rgba(245,158,11,.2),rgba(20,184,166,.12)) !important;
-    border-color:rgba(245,158,11,.3) !important;
+    transform:translateY(-1px) !important;
+    box-shadow: 0 6px 18px rgba(245,158,11,.16) !important;
+    background: rgba(245,158,11,.16) !important;
+    border-color:rgba(245,158,11,.4) !important;
 }
 .stButton>button:active { transform:translateY(0) !important; }
 .stButton>button[disabled] {
@@ -115,9 +132,9 @@ p,li,span,div { color:var(--text1) !important; }
 .stTextInput>div>div>input::placeholder,
 .stTextArea>div>div>textarea::placeholder { color:var(--text3) !important; }
 label,.stTextInput label,.stTextArea label,.stNumberInput label,
-.stSelectbox label,.stFileUploader label {
-    color:var(--text2) !important; font-weight:500 !important;
-    font-size:.82rem !important; letter-spacing:.03em !important;
+.stSelectbox label,.stFileUploader label,.stSlider label,.stToggle label {
+    color:var(--text3) !important; font-weight:600 !important;
+    font-size:.72rem !important; letter-spacing:.09em !important;
     text-transform:uppercase !important;
 }
 
@@ -143,17 +160,15 @@ label,.stTextInput label,.stTextArea label,.stNumberInput label,
     transform:translateY(-2px);
 }
 [data-testid="stMetricValue"] {
-    font-family:'Inter',sans-serif !important; font-weight:800 !important;
-    font-size:1.7rem !important;
-    background:linear-gradient(135deg,var(--accent),var(--accent3)) !important;
-    -webkit-background-clip:text !important;
-    -webkit-text-fill-color:transparent !important;
-    background-clip:text !important;
+    font-family:var(--font-display) !important; font-weight:700 !important;
+    font-size:1.75rem !important; color:var(--text1) !important;
+    letter-spacing:-0.02em !important;
+    font-variant-numeric:tabular-nums !important;
 }
 [data-testid="stMetricLabel"] {
-    color:var(--text2) !important; font-weight:500 !important;
-    text-transform:uppercase !important; font-size:.72rem !important;
-    letter-spacing:.08em !important;
+    color:var(--text3) !important; font-weight:600 !important;
+    text-transform:uppercase !important; font-size:.68rem !important;
+    letter-spacing:.1em !important;
 }
 
 /* ── Expanders ─────────────────────────────────────────────────────── */
@@ -240,16 +255,18 @@ hr {
 
 /* ── Custom Components ─────────────────────────────────────────────── */
 .hero-title {
-    font-size:3rem; font-weight:900; letter-spacing:-0.03em; line-height:1.1;
-    margin-bottom:.4rem;
-    background:linear-gradient(135deg,#F59E0B 0%,#FB923C 40%,#14B8A6 100%);
+    font-family:var(--font-display);
+    font-size:3.15rem; font-weight:800; letter-spacing:-0.045em; line-height:1.02;
+    margin-bottom:.55rem;
+    background:linear-gradient(115deg,var(--text1) 0%,var(--text1) 52%,var(--accent) 100%);
     -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-    background-clip:text; background-size:200% 200%;
-    animation:gradText 6s ease-in-out infinite alternate;
+    background-clip:text;
 }
-@keyframes gradText { 0%{background-position:0% 50%} 100%{background-position:100% 50%} }
 
-.hero-sub { font-size:1.1rem; color:var(--text2); line-height:1.6; max-width:580px; }
+.hero-sub {
+    font-family:var(--font-body); font-size:1.08rem; color:var(--text2);
+    line-height:1.6; max-width:600px; font-weight:450;
+}
 
 .glass-card {
     background:var(--bg-glass); backdrop-filter:blur(16px);
@@ -314,13 +331,12 @@ hr {
 }
 .stat-glow:hover { border-color:rgba(245,158,11,.2); box-shadow:0 0 30px rgba(245,158,11,.1); transform:translateY(-2px); }
 .stat-glow .sn {
-    font-size:2.2rem; font-weight:800;
-    background:linear-gradient(135deg,var(--accent),var(--accent3));
-    -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
+    font-family:var(--font-display); font-size:2.15rem; font-weight:800;
+    color:var(--accent); letter-spacing:-0.02em; font-variant-numeric:tabular-nums;
 }
 .stat-glow .sl {
-    font-size:.72rem; color:var(--text3); text-transform:uppercase;
-    letter-spacing:.1em; font-weight:600; margin-top:3px;
+    font-size:.68rem; color:var(--text3); text-transform:uppercase;
+    letter-spacing:.12em; font-weight:600; margin-top:4px;
 }
 
 .disclaimer-v2 {
@@ -336,7 +352,7 @@ hr {
 
 /* ── Particles ─────────────────────────────────────────────────────── */
 .particles { position:fixed; inset:0; pointer-events:none; z-index:0; overflow:hidden; }
-.p { position:absolute; width:2px; height:2px; border-radius:50%; opacity:.15; animation:fl 18s infinite ease-in-out; }
+.p { position:absolute; width:2px; height:2px; border-radius:50%; opacity:.08; animation:fl 22s infinite ease-in-out; }
 .p:nth-child(1){left:8%;background:var(--accent);animation-duration:16s}
 .p:nth-child(2){left:22%;background:var(--accent2);animation-delay:-4s;animation-duration:20s}
 .p:nth-child(3){left:40%;background:var(--accent3);animation-delay:-7s;animation-duration:22s}

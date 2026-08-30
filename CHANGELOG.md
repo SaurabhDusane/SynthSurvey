@@ -18,6 +18,9 @@ to follow semantic versioning.
   marked `is_synthetic`.
 
 ### Changed
+- **Light theme is now the default, with a "Dark mode" toggle** in the sidebar.
+  The stylesheet is fully variable-driven (light `:root`; a dark override is
+  injected when toggled), and Plotly charts are theme-aware.
 - Replaced deprecated `use_container_width` with `width="stretch"` throughout.
 
 ### Added — Insight, QA & reuse (feature phase 3)

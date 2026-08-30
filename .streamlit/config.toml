@@ -3,11 +3,13 @@
 [server]
 headless = true
 
+# Light by default; the in-app "Dark mode" toggle restyles the custom UI.
 [theme]
-primaryColor = "#F59E0B"
-backgroundColor = "#0c0a09"
-secondaryBackgroundColor = "#12100d"
-textColor = "#FAF5EF"
+base = "light"
+primaryColor = "#D97706"
+backgroundColor = "#f6f3ee"
+secondaryBackgroundColor = "#efeae2"
+textColor = "#1c1917"
 font = "sans serif"
 
 [browser]

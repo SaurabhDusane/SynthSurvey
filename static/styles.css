@@ -1,18 +1,24 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
 
 /* ── CSS Variables ─────────────────────────────────────────────────── */
+/* Default palette is LIGHT. app.py injects a dark override when the
+   "Dark mode" toggle is on (it re-declares these variables). */
 :root {
-    --bg-primary: #0c0a09;
-    --bg-card: rgba(255,245,230,0.02);
-    --bg-glass: rgba(255,245,230,0.035);
-    --border-glass: rgba(255,200,120,0.08);
-    --accent: #F59E0B;
-    --accent2: #FB923C;
-    --accent3: #14B8A6;
-    --accent4: #F472B6;
-    --text1: #FAF5EF;
-    --text2: #B8A99A;
-    --text3: #6B5E52;
+    --bg-primary: #f6f3ee;
+    --bg-secondary: linear-gradient(180deg,#ffffff,#f1ece3);
+    --bg-card: rgba(28,25,23,0.02);
+    --bg-glass: rgba(28,25,23,0.035);
+    --border-glass: rgba(28,25,23,0.12);
+    --overlay: rgba(28,25,23,0.05);
+    --hairline: rgba(28,25,23,0.10);
+    --dl-bg: linear-gradient(135deg,#ffffff,#f1ece3);
+    --accent: #D97706;
+    --accent2: #EA7A2C;
+    --accent3: #0D9488;
+    --accent4: #DB2777;
+    --text1: #1c1917;
+    --text2: #57534e;
+    --text3: #8a827b;
     --radius: 14px;
     --radius-lg: 22px;
     --smooth: all 0.35s cubic-bezier(.25,.46,.45,.94);
@@ -44,7 +50,7 @@
 
 /* ── Sidebar ───────────────────────────────────────────────────────── */
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg,#0f0c09,#12100d) !important;
+    background: var(--bg-secondary) !important;
     border-right: 1px solid var(--border-glass) !important;
 }
 section[data-testid="stSidebar"] * { color: var(--text2) !important; }
@@ -84,7 +90,7 @@ p,li,span,div { color:var(--text1) !important; }
 }
 .stButton>button:active { transform:translateY(0) !important; }
 .stButton>button[disabled] {
-    background:rgba(255,255,255,.05) !important;
+    background:var(--overlay) !important;
     color:var(--text3) !important; box-shadow:none !important;
 }
 
@@ -160,10 +166,10 @@ label,.stTextInput label,.stTextArea label,.stNumberInput label,
 }
 .streamlit-expanderHeader:hover {
     border-color:rgba(245,158,11,.2) !important;
-    background:rgba(255,255,255,.05) !important;
+    background:var(--overlay) !important;
 }
 .streamlit-expanderContent {
-    background:rgba(255,255,255,.02) !important;
+    background:var(--overlay) !important;
     border:1px solid var(--border-glass) !important;
     border-top:none !important;
     border-radius:0 0 var(--radius) var(--radius) !important;
@@ -215,7 +221,7 @@ hr {
 
 /* ── Download buttons ──────────────────────────────────────────────── */
 .stDownloadButton>button {
-    background:linear-gradient(135deg,#1a1510,#1c1812) !important;
+    background:var(--dl-bg) !important;
     border:1px solid var(--border-glass) !important;
     color:var(--text1) !important; border-radius:var(--radius) !important;
     transition:var(--smooth) !important;
@@ -252,7 +258,7 @@ hr {
 }
 .glass-card::before {
     content:''; position:absolute; top:0;left:0;right:0; height:1px;
-    background:linear-gradient(90deg,transparent,rgba(255,255,255,.08),transparent);
+    background:linear-gradient(90deg,transparent,var(--hairline),transparent);
 }
 .glass-card:hover {
     border-color:rgba(245,158,11,.15);
@@ -351,7 +357,7 @@ hr {
 
 /* ── Keyboard Shortcut Keys ─────────────────────────────────────── */
 .kbd {
-    display:inline-block; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1);
+    display:inline-block; background:var(--overlay); border:1px solid var(--hairline);
     border-radius:6px; padding:2px 8px; font-family:'JetBrains Mono',monospace;
     font-size:.72rem; color:var(--text2); font-weight:500;
     box-shadow:0 1px 2px rgba(0,0,0,.2);

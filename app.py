@@ -53,7 +53,26 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Custom CSS ───────────────────────────────────────────────────────────────
+# ─── Custom CSS & Theme ─────────────────────────────────────────────────────
+
+# Dark palette — re-declares the stylesheet's :root variables. Injected after the
+# (light-default) stylesheet when the "Dark mode" toggle is on, so it wins.
+_DARK_OVERRIDE = """
+:root {
+    --bg-primary:#0c0a09;
+    --bg-secondary:linear-gradient(180deg,#0f0c09,#12100d);
+    --bg-card:rgba(255,245,230,0.02);
+    --bg-glass:rgba(255,245,230,0.035);
+    --border-glass:rgba(255,200,120,0.08);
+    --overlay:rgba(255,255,255,0.05);
+    --hairline:rgba(255,255,255,0.08);
+    --dl-bg:linear-gradient(135deg,#1a1510,#1c1812);
+    --accent:#F59E0B; --accent2:#FB923C; --accent3:#14B8A6; --accent4:#F472B6;
+    --text1:#FAF5EF; --text2:#B8A99A; --text3:#8a7f74;
+}
+.stApp, [data-testid="stHeader"] { background:#0c0a09 !important; }
+"""
+
 
 @st.cache_data
 def _load_css() -> str:
@@ -61,7 +80,13 @@ def _load_css() -> str:
     return (Path(__file__).parent / "static" / "styles.css").read_text(encoding="utf-8")
 
 
+def _dark_mode() -> bool:
+    return bool(st.session_state.get("dark_mode", False))
+
+
 st.markdown(f"<style>{_load_css()}</style>", unsafe_allow_html=True)
+if _dark_mode():
+    st.markdown(f"<style>{_DARK_OVERRIDE}</style>", unsafe_allow_html=True)
 st.markdown(
     '<div class="particles">'
     '<div class="p"></div><div class="p"></div><div class="p"></div>'
@@ -100,6 +125,7 @@ def init_session_state():
         "waves": 1,
         "stimuli": [],
         "seed": 42,
+        "dark_mode": False,
     }
     # Per-provider API key + model defaults, from the central registry.
     for spec in PROVIDERS.values():
@@ -207,6 +233,11 @@ with st.sidebar:
             Synthetic Data Engine</div>
     </div>
     """, unsafe_allow_html=True)
+
+    st.toggle(
+        "🌙 Dark mode", key="dark_mode",
+        help="Switch between the light and dark theme.",
+    )
 
     st.markdown('<div class="section-label">Navigation</div>', unsafe_allow_html=True)
 
@@ -1379,13 +1410,11 @@ def render_fidelity(schema: FormSchema, df: pd.DataFrame):
             pq, x="similarity", y="question", orientation="h",
             range_x=[0, 100], title="Distribution match by question (higher = closer)",
             color="similarity", color_continuous_scale=["#EF4444", "#F59E0B", "#14B8A6"],
-            template="plotly_dark",
+            template=_chart_template(),
         )
-        fig.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="Inter", color="#E8E6F0"),
+        fig.update_layout(**_chart_layout(
             height=max(300, len(pq) * 38), yaxis_title="", xaxis_title="Similarity",
-        )
+        ))
         st.plotly_chart(fig, width="stretch")
         with st.expander("Per-question detail"):
             st.dataframe(
@@ -1400,10 +1429,20 @@ def render_fidelity(schema: FormSchema, df: pd.DataFrame):
         st.caption(note)
 
 
-_PLOTLY_DARK = dict(
-    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(family="Inter", color="#E8E6F0"),
-)
+def _chart_template() -> str:
+    return "plotly_dark" if _dark_mode() else "plotly_white"
+
+
+def _chart_layout(**extra) -> dict:
+    """Transparent, theme-aware Plotly layout (font readable in both themes)."""
+    color = "#E8E6F0" if _dark_mode() else "#1c1917"
+    base = dict(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter", color=color),
+        title_font=dict(color=color),
+    )
+    base.update(extra)
+    return base
 
 
 _XTAB_TYPES = (
@@ -1464,8 +1503,8 @@ def render_insights(schema: FormSchema, df: pd.DataFrame):
 
     long = res["table"].reset_index().melt(id_vars=res["table"].index.name, var_name=b, value_name="count")
     fig = px.bar(long, x=res["table"].index.name, y="count", color=b, barmode="group",
-                 title=f"{a[:40]} × {b[:40]}", template="plotly_dark")
-    fig.update_layout(**_PLOTLY_DARK)
+                 title=f"{a[:40]} × {b[:40]}", template=_chart_template())
+    fig.update_layout(**_chart_layout())
     st.plotly_chart(fig, width="stretch")
 
 
@@ -1491,8 +1530,8 @@ def render_ab_comparison(schema: FormSchema, df: pd.DataFrame):
                     rows.append({"Question": c[:40], "Variant": var, "Mean rating": round(float(m), 2)})
         if rows:
             fig = px.bar(pd.DataFrame(rows), x="Question", y="Mean rating", color="Variant",
-                         barmode="group", title="Mean scale rating by variant", template="plotly_dark")
-            fig.update_layout(**_PLOTLY_DARK)
+                         barmode="group", title="Mean scale rating by variant", template=_chart_template())
+            fig.update_layout(**_chart_layout())
             st.plotly_chart(fig, width="stretch")
 
     choice_qs = [q for q in schema.questions
@@ -1503,8 +1542,8 @@ def render_ab_comparison(schema: FormSchema, df: pd.DataFrame):
         ct = (d.groupby("stimulus_variant")[c].value_counts(normalize=True)
               .mul(100).round(1).rename("percent").reset_index())
         fig = px.bar(ct, x=c, y="percent", color="stimulus_variant", barmode="group",
-                     title=f"{c[:50]} — share by variant", template="plotly_dark")
-        fig.update_layout(**_PLOTLY_DARK, yaxis_title="%", legend_title="Variant")
+                     title=f"{c[:50]} — share by variant", template=_chart_template())
+        fig.update_layout(**_chart_layout(), yaxis_title="%", legend_title="Variant")
         st.plotly_chart(fig, width="stretch")
 
 
@@ -1533,8 +1572,8 @@ def render_waves(schema: FormSchema, df: pd.DataFrame):
                 rows.append({"Wave": int(w), "Question": c[:40], "Mean rating": round(float(m), 2)})
     if rows:
         fig = px.line(pd.DataFrame(rows), x="Wave", y="Mean rating", color="Question",
-                      markers=True, title="Mean scale rating drift across waves", template="plotly_dark")
-        fig.update_layout(**_PLOTLY_DARK)
+                      markers=True, title="Mean scale rating drift across waves", template=_chart_template())
+        fig.update_layout(**_chart_layout())
         fig.update_xaxes(dtick=1)
         st.plotly_chart(fig, width="stretch")
 
@@ -1550,11 +1589,7 @@ def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: Surv
 
     colors = ["#F59E0B", "#FB923C", "#14B8A6", "#F472B6", "#FBBF24",
               "#34D399", "#60A5FA", "#A78BFA", "#EF4444", "#C084FC"]
-    layout_common = dict(
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Inter", color="#E8E6F0"),
-        title_font=dict(size=14, color="#E8E6F0"),
-    )
+    layout_common = _chart_layout()
 
     # --- Uniqueness score ---
     question_cols = [q.question_text for q in schema.questions if q.question_text in df.columns]
@@ -1618,7 +1653,7 @@ def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: Surv
             title="Response Diversity by Question",
             color="Diversity %",
             color_continuous_scale=["#EF4444", "#F59E0B", "#14B8A6"],
-            template="plotly_dark",
+            template=_chart_template(),
         )
         fig.update_layout(**layout_common, height=max(300, len(diversity_data) * 35))
         fig.update_traces(marker_cornerradius=6)
@@ -1650,7 +1685,7 @@ def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: Surv
                 eng_counts.columns = ["Engagement", "Count"]
                 fig = px.pie(eng_counts, values="Count", names="Engagement",
                              title="Engagement Level Distribution",
-                             color_discrete_sequence=colors, template="plotly_dark")
+                             color_discrete_sequence=colors, template=_chart_template())
                 fig.update_layout(**layout_common)
                 fig.update_traces(textinfo="label+percent", textfont_size=12)
                 st.plotly_chart(fig, width="stretch")
@@ -1667,7 +1702,7 @@ def render_diversity_metrics(schema: FormSchema, df: pd.DataFrame, dataset: Surv
                     fig = px.histogram(lengths, nbins=20,
                                        title=f"Response Length: {text_cols[0][:30]}...",
                                        labels={"value": "Characters", "count": "Frequency"},
-                                       template="plotly_dark",
+                                       template=_chart_template(),
                                        color_discrete_sequence=[colors[2]])
                     fig.update_layout(**layout_common)
                     fig.update_traces(marker_cornerradius=6)
@@ -1803,17 +1838,13 @@ def render_charts(schema: FormSchema, df: pd.DataFrame):
         return
 
     qt = selected_q.question_type
-    layout_common = dict(
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Inter", color="#E8E6F0"),
-        title_font=dict(size=15, color="#E8E6F0"),
-    )
+    layout_common = _chart_layout()
 
     if qt in (QuestionType.MULTIPLE_CHOICE, QuestionType.DROPDOWN):
         counts = df[col_name].value_counts().reset_index()
         counts.columns = ["Option", "Count"]
         fig = px.bar(counts, x="Option", y="Count", title=f"Distribution: {col_name}",
-                     color="Option", color_discrete_sequence=colors, template="plotly_dark")
+                     color="Option", color_discrete_sequence=colors, template=_chart_template())
         fig.update_layout(**layout_common, showlegend=False)
         fig.update_traces(marker_line_width=0, marker_cornerradius=8)
         st.plotly_chart(fig, width="stretch")
@@ -1825,7 +1856,7 @@ def render_charts(schema: FormSchema, df: pd.DataFrame):
             fig2 = px.bar(comp, x=col_name, y="Count", color="Source", barmode="group",
                           title=f"Real vs Synthetic: {col_name}",
                           color_discrete_map={"Synthetic": "#F59E0B", "Real": "#14B8A6"},
-                          template="plotly_dark")
+                          template=_chart_template())
             fig2.update_layout(**layout_common)
             fig2.update_traces(marker_cornerradius=8)
             st.plotly_chart(fig2, width="stretch")
@@ -1837,7 +1868,7 @@ def render_charts(schema: FormSchema, df: pd.DataFrame):
         fig = px.histogram(numeric_col.dropna(), nbins=nbins,
                            title=f"Distribution: {col_name}",
                            labels={"value": col_name, "count": "Frequency"},
-                           template="plotly_dark", color_discrete_sequence=[colors[0]])
+                           template=_chart_template(), color_discrete_sequence=[colors[0]])
         fig.update_layout(**layout_common)
         fig.update_traces(marker_cornerradius=6)
         st.plotly_chart(fig, width="stretch")
@@ -1853,7 +1884,7 @@ def render_charts(schema: FormSchema, df: pd.DataFrame):
         counts.columns = ["Option", "Count"]
         fig = px.bar(counts, x="Option", y="Count",
                      title=f"Distribution: {col_name} (Checkboxes)",
-                     color="Option", color_discrete_sequence=colors, template="plotly_dark")
+                     color="Option", color_discrete_sequence=colors, template=_chart_template())
         fig.update_layout(**layout_common, showlegend=False)
         fig.update_traces(marker_line_width=0, marker_cornerradius=8)
         st.plotly_chart(fig, width="stretch")
